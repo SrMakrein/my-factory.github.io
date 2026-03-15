@@ -1,0 +1,2464 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Factorio Web - Juego de Automatización</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: #1a1a1a;
+        color: #fff;
+        overflow: hidden;
+        position: fixed;
+      }
+
+      #gameContainer {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+      }
+
+      canvas {
+        display: block;
+        background: #2a2a2a;
+        cursor: crosshair;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        width: 100%;
+        height: 100%;
+      }
+
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: #1a1a1a;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: #444;
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: #666;
+      }
+
+      ::selection {
+        background: rgba(100, 200, 255, 0.5);
+        color: #fff;
+      }
+
+      #consoleButton {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 50px;
+        height: 50px;
+        background: #2a4a2a;
+        border: 2px solid #4a8a4a;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        color: #4a8a4a;
+        transition: all 0.3s ease;
+        z-index: 1000;
+        box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+      }
+
+      #consoleButton:hover {
+        width: 60px;
+        height: 60px;
+        font-size: 28px;
+        box-shadow: 0 0 20px rgba(0, 255, 0, 0.6);
+        border-color: #00ff00;
+        color: #00ff00;
+      }
+
+      #consolePanel {
+        position: fixed;
+        bottom: 90px;
+        right: 20px;
+        width: 400px;
+        height: 300px;
+        background: #1a1a1a;
+        border: 2px solid #4a8a4a;
+        border-radius: 8px;
+        display: none;
+        flex-direction: column;
+        z-index: 1000;
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+      }
+
+      #consolePanel.open {
+        display: flex;
+      }
+
+      #consoleHeader {
+        padding: 10px 15px;
+        background: #2a4a2a;
+        border-bottom: 1px solid #4a8a4a;
+        font-weight: bold;
+        color: #4a8a4a;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      #consoleHeader button {
+        background: #4a8a4a;
+        border: none;
+        color: #1a1a1a;
+        padding: 3px 8px;
+        border-radius: 3px;
+        cursor: pointer;
+        font-weight: bold;
+      }
+
+      #consoleHeader button:hover {
+        background: #6aaa6a;
+      }
+
+      #consoleOutput {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px;
+        font-family: "Courier New", monospace;
+        font-size: 11px;
+        color: #4a8a4a;
+        line-height: 1.4;
+      }
+
+      .log-info { color: #4a8a4a; }
+      .log-error { color: #ff6b6b; }
+      .log-warn { color: #ffd93d; }
+      .log-debug { color: #87ceeb; }
+    </style>
+  </head>
+  <body>
+    <div id="gameContainer">
+      <canvas id="gameCanvas"></canvas>
+      <button id="consoleButton">█</button>
+      <div id="consolePanel">
+        <div id="consoleHeader">
+          <span>CONSOLA</span>
+          <button onclick="document.getElementById('consoleOutput').innerHTML = ''">Limpiar</button>
+        </div>
+        <div id="consoleOutput"></div>
+      </div>
+    </div>
+
+    <script>
+      // ============================================================================
+      // TIPOS Y ENUMS
+      // ============================================================================
+
+      const ResourceType = {
+        IRON: "iron",
+        COPPER: "copper",
+        COAL: "coal",
+        IRON_PLATE: "iron_plate",
+        COPPER_PLATE: "copper_plate",
+        CABLE: "cable",
+        COIL: "coil",
+        CONSTRUCTION_PARTS: "construction_parts",
+      };
+
+      const BuildingType = {
+        MINER: "miner",
+        CONVEYOR: "conveyor",
+        STORAGE: "storage",
+        SMELTER: "smelter",
+        ASSEMBLER: "assembler",
+      };
+
+      const Direction = {
+        UP: 0,
+        RIGHT: 1,
+        DOWN: 2,
+        LEFT: 3,
+      };
+
+      // ============================================================================
+      // SISTEMA DE CONSOLA Y LOGGING
+      // ============================================================================
+
+      class ConsoleLogger {
+        constructor() {
+          this.logs = [];
+          this.maxLogs = 150;
+          this.setupUI();
+          this.tickCounter = 0;
+        }
+
+        setupUI() {
+          document.getElementById('consoleButton').addEventListener('click', () => {
+            document.getElementById('consolePanel').classList.toggle('open');
+          });
+        }
+
+        log(message, type = 'info') {
+          const timestamp = new Date().toLocaleTimeString();
+          const logEntry = `[${timestamp}] ${message}`;
+          this.logs.push({ message: logEntry, type });
+
+          if (this.logs.length > this.maxLogs) {
+            this.logs.shift();
+          }
+
+          this.updateUI();
+          // También imprimir en consola del navegador para debugging
+          console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+
+        info(message) { this.log(message, 'info'); }
+        error(message) { this.log(message, 'error'); }
+        warn(message) { this.log(message, 'warn'); }
+        debug(message) { this.log(message, 'debug'); }
+
+        updateUI() {
+          const output = document.getElementById('consoleOutput');
+          if (!output) return;
+          output.innerHTML = this.logs
+            .map(log => `<div class="log-${log.type}">${log.message}</div>`)
+            .join('');
+          output.scrollTop = output.scrollHeight;
+        }
+
+        tick() {
+          this.tickCounter++;
+          if (this.tickCounter % 10 === 0) {
+            this.debug(`Tick #${this.tickCounter}`);
+          }
+        }
+      }
+
+      const logger = new ConsoleLogger();
+      logger.info('🟢 Sistema iniciado');
+
+      // ============================================================================
+      // GENERADOR DE SPRITES
+      // ============================================================================
+
+      class SpriteGenerator {
+        static generateResourceSprite(resourceType, size = 16) {
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext("2d");
+
+          // Definir paleta de colores para pixel art
+          const palettes = {
+            iron: { main: "#8B8B8B", dark: "#5A5A5A", light: "#B0B0B0" },
+            copper: { main: "#CD7F32", dark: "#944D1E", light: "#E8A76A" },
+            coal: { main: "#2F2F2F", dark: "#0F0F0F", light: "#4A4A4A" },
+            iron_plate: { main: "#A9A9A9", dark: "#6F6F6F", light: "#D3D3D3" },
+            copper_plate: { main: "#E8A76A", dark: "#B8752A", light: "#F0B87A" },
+            cable: { main: "#FFD700", dark: "#DAA520", light: "#FFFF00" },
+            coil: { main: "#FF6B6B", dark: "#DC143C", light: "#FF8C8C" },
+            construction_parts: { main: "#87CEEB", dark: "#4682B4", light: "#ADD8E6" },
+          };
+
+          const palette = palettes[resourceType] || palettes.iron;
+          ctx.imageSmoothingEnabled = false;
+
+          switch (resourceType) {
+            case "iron":
+              // Piedra gris de hierro con textura rugosa
+              ctx.fillStyle = palette.main;
+              ctx.fillRect(3, 3, 10, 10);
+              ctx.fillStyle = palette.dark;
+              ctx.fillRect(4, 4, 2, 2);
+              ctx.fillRect(10, 5, 2, 2);
+              ctx.fillRect(5, 10, 2, 2);
+              ctx.fillStyle = palette.light;
+              ctx.fillRect(9, 9, 2, 2);
+              break;
+
+            case "copper":
+              // Mineral de cobre anaranjado con brillo
+              ctx.fillStyle = palette.main;
+              ctx.fillRect(3, 3, 10, 10);
+              ctx.fillStyle = palette.dark;
+              ctx.fillRect(3, 3, 3, 3);
+              ctx.fillRect(10, 6, 2, 2);
+              ctx.fillStyle = palette.light;
+              ctx.fillRect(6, 8, 3, 2);
+              ctx.fillRect(8, 6, 2, 2);
+              break;
+
+            case "coal":
+              // Fondo gris oscuro para el carbón
+              ctx.fillStyle = "#3a3a3a";
+              ctx.fillRect(2, 2, size - 4, size - 4);
+              
+              // Carbón con forma de trozos facetados
+              ctx.fillStyle = palette.main;
+              // Trozo principal izquierdo
+              ctx.fillRect(3, 5, 4, 4);
+              // Trozo principal derecho
+              ctx.fillRect(8, 7, 4, 4);
+              // Facetas oscuras
+              ctx.fillStyle = palette.dark;
+              ctx.fillRect(3, 5, 2, 2);
+              ctx.fillRect(8, 7, 2, 2);
+              ctx.fillRect(5, 9, 2, 2);
+              // Pequeños trozos de luz
+              ctx.fillStyle = palette.light;
+              ctx.fillRect(5, 6, 1, 1);
+              ctx.fillRect(10, 9, 1, 1);
+              break;
+
+            case "iron_plate":
+              // Placa de hierro con patrón metálico
+              ctx.fillStyle = palette.main;
+              ctx.fillRect(2, 3, 12, 10);
+              ctx.strokeStyle = palette.dark;
+              ctx.lineWidth = 1;
+              // Líneas de metal
+              ctx.beginPath();
+              ctx.moveTo(2, 6);
+              ctx.lineTo(14, 6);
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(2, 9);
+              ctx.lineTo(14, 9);
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(2, 12);
+              ctx.lineTo(14, 12);
+              ctx.stroke();
+              ctx.fillStyle = palette.light;
+              ctx.fillRect(3, 4, 10, 1);
+              break;
+
+            case "copper_plate":
+              // Placa de cobre con brillo diagonal
+              ctx.fillStyle = palette.main;
+              ctx.fillRect(2, 3, 12, 10);
+              ctx.strokeStyle = palette.dark;
+              ctx.lineWidth = 1;
+              // Patrón diagonal
+              for (let i = 0; i < 16; i += 2) {
+                ctx.beginPath();
+                ctx.moveTo(i, 3);
+                ctx.lineTo(i + 8, 13);
+                ctx.stroke();
+              }
+              ctx.fillStyle = palette.light;
+              ctx.fillRect(3, 4, 2, 1);
+              ctx.fillRect(9, 10, 2, 1);
+              break;
+
+            case "cable":
+              // Cable - icono con dos líneas curvas (amarilla y roja) sobre rectángulo azul
+              // Fondo azul oscuro
+              ctx.fillStyle = "#2C3E50";
+              ctx.fillRect(2, 2, 12, 12);
+              
+              // Línea amarilla superior izquierda (curva hacia arriba)
+              ctx.strokeStyle = "#FFD700";
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(5, 8);
+              ctx.quadraticCurveTo(4, 4, 7, 3);
+              ctx.stroke();
+              
+              // Línea roja superior derecha (curva hacia arriba)
+              ctx.strokeStyle = "#FF6B6B";
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(11, 8);
+              ctx.quadraticCurveTo(12, 4, 9, 3);
+              ctx.stroke();
+              break;
+
+            case "coil":
+              // Bobina carrete - similar al icono proporcionado
+              // Base circular del carrete (naranja/marrón)
+              ctx.fillStyle = "#C87137"; // Naranja oscuro
+              ctx.beginPath();
+              ctx.arc(8, 8, 6, 0, Math.PI * 2);
+              ctx.fill();
+              
+              // Agujero en el centro
+              ctx.fillStyle = "rgba(0, 0, 0, 0)"; // Transparente
+              ctx.clearRect(6.5, 6.5, 3, 3);
+              
+              // Círculo oscuro del agujero
+              ctx.fillStyle = "#8B4513"; // Marrón más oscuro
+              ctx.beginPath();
+              ctx.arc(8, 8, 1.5, 0, Math.PI * 2);
+              ctx.fill();
+              
+              // Cable enrollado (líneas azul oscuro) en el medio
+              ctx.strokeStyle = "#2C3E50"; // Azul oscuro
+              ctx.lineWidth = 0.8;
+              for (let i = 0; i < 5; i++) {
+                ctx.beginPath();
+                ctx.arc(8, 8, 3.5 - i * 0.5, 0, Math.PI * 2);
+                ctx.stroke();
+              }
+              
+              // Aro dorado alrededor (borde)
+              ctx.strokeStyle = palette.light; // Dorado
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.arc(8, 8, 6, 0, Math.PI * 2);
+              ctx.stroke();
+              
+              // Brillo en la esquina superior izquierda
+              ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+              ctx.beginPath();
+              ctx.arc(5.5, 5.5, 0.8, 0, Math.PI * 2);
+              ctx.fill();
+              break;
+
+            case "construction_parts":
+              // Piezas de construcción azules
+              ctx.fillStyle = palette.main;
+              ctx.fillRect(2, 2, 12, 12);
+              ctx.fillStyle = palette.dark;
+              ctx.fillRect(4, 4, 3, 3);
+              ctx.fillRect(9, 4, 3, 3);
+              ctx.fillRect(4, 9, 3, 3);
+              ctx.fillRect(9, 9, 3, 3);
+              ctx.fillStyle = palette.light;
+              ctx.fillRect(3, 3, 10, 1);
+              ctx.fillRect(3, 3, 1, 10);
+              break;
+          }
+
+          // Borde oscuro
+          ctx.strokeStyle = "#000";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(2, 2, size - 4, size - 4);
+
+          return canvas;
+        }
+
+        static generateBuildingSprite(buildingType, direction, size = 32) {
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext("2d");
+
+          ctx.fillStyle = "#f0f0f0";
+          ctx.fillRect(0, 0, size, size);
+          ctx.strokeStyle = "#333";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(0, 0, size, size);
+
+          ctx.fillStyle = "#333";
+          ctx.font = `${size * 0.5}px Arial`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+
+          const icons = {
+            miner: "⛏",
+            conveyor: "→",
+            storage: "📦",
+            smelter: "🔥",
+            assembler: "⚙",
+          };
+
+          // Dibujar el icono
+          const text = icons[buildingType] || "?";
+          
+          // Si es cinta y tiene dirección, rotar
+          if (buildingType === "conveyor" && direction !== undefined) {
+            ctx.save();
+            ctx.translate(size / 2, size / 2);
+            
+            const rotations = {
+              0: -Math.PI / 2,   // UP
+              1: 0,              // RIGHT
+              2: Math.PI / 2,    // DOWN
+              3: Math.PI         // LEFT
+            };
+            
+            ctx.rotate(rotations[direction] || 0);
+            ctx.fillText(text, 0, 0);
+            ctx.restore();
+          } else {
+            ctx.fillText(text, size / 2, size / 2);
+          }
+          
+          return canvas;
+        }
+
+        static generateTerrainTile(tileSize, resourceType) {
+          const canvas = document.createElement("canvas");
+          canvas.width = tileSize;
+          canvas.height = tileSize;
+          const ctx = canvas.getContext("2d");
+
+          ctx.fillStyle = "#1a5c1a";
+          ctx.fillRect(0, 0, tileSize, tileSize);
+
+          if (resourceType) {
+            const colors = {
+              iron: "#A0A0A0",
+              copper: "#D4621D",
+              coal: "#2A2A2A",
+            };
+
+            ctx.fillStyle = colors[resourceType] || "#888";
+            ctx.beginPath();
+            ctx.arc(tileSize / 2, tileSize / 2, tileSize * 0.3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          return canvas;
+        }
+      }
+
+      class SpriteCache {
+        constructor() {
+          this.cache = new Map();
+        }
+
+        getResourceSprite(type) {
+          const key = `resource_${type}`;
+          if (!this.cache.has(key)) {
+            this.cache.set(key, SpriteGenerator.generateResourceSprite(type));
+          }
+          return this.cache.get(key);
+        }
+
+        getBuildingSprite(type, direction) {
+          const key = direction !== undefined ? `building_${type}_${direction}` : `building_${type}`;
+          if (!this.cache.has(key)) {
+            this.cache.set(key, SpriteGenerator.generateBuildingSprite(type, direction));
+          }
+          return this.cache.get(key);
+        }
+
+        getTerrainSprite(type) {
+          const key = `terrain_${type || "empty"}`;
+          if (!this.cache.has(key)) {
+            this.cache.set(key, SpriteGenerator.generateTerrainTile(32, type));
+          }
+          return this.cache.get(key);
+        }
+
+        clear() {
+          this.cache.clear();
+        }
+      }
+
+      // ============================================================================
+      // SISTEMA DE GRID Y CÁMARA
+      // ============================================================================
+
+      class GridSystem {
+        constructor(width, height) {
+          this.width = width;
+          this.height = height;
+          this.grid = [];
+          this.tileSize = 32;
+          this.initializeGrid();
+        }
+
+        initializeGrid() {
+          for (let y = 0; y < this.height; y++) {
+            this.grid[y] = [];
+            for (let x = 0; x < this.width; x++) {
+              this.grid[y][x] = {
+                x,
+                y,
+                terrain: "grass",
+              };
+
+              if (Math.random() < 0.08) {
+                const resourceTypes = [ResourceType.IRON, ResourceType.COPPER, ResourceType.COAL];
+                const randomType = resourceTypes[Math.floor(Math.random() * resourceTypes.length)];
+                this.grid[y][x].resource = {
+                  type: randomType,
+                  quantity: 500,
+                };
+              }
+            }
+          }
+        }
+
+        getTile(x, y) {
+          if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
+            return this.grid[y][x];
+          }
+          return null;
+        }
+
+        getGrid() {
+          return this.grid;
+        }
+
+        canPlaceBuilding(x, y) {
+          const tile = this.getTile(x, y);
+          if (!tile) return false;
+          return !tile.building;
+        }
+
+        placeBuilding(x, y, building) {
+          const tile = this.getTile(x, y);
+          if (!tile) {
+            return false;
+          }
+          if (tile.building) {
+            return false;
+          }
+          tile.building = building;
+          return true;
+        }
+
+        removeBuilding(x, y) {
+          const tile = this.getTile(x, y);
+          if (tile && tile.building) {
+            const building = tile.building;
+            tile.building = undefined;
+            return building;
+          }
+          return null;
+        }
+
+        getBuildingAt(x, y) {
+          const tile = this.getTile(x, y);
+          return tile?.building;
+        }
+
+        getResourceAt(x, y) {
+          const tile = this.getTile(x, y);
+          return tile?.resource;
+        }
+
+        extractResource(x, y, amount) {
+          const resource = this.getResourceAt(x, y);
+          if (!resource) return 0;
+
+          const extracted = Math.min(amount, resource.quantity);
+          resource.quantity -= extracted;
+
+          if (resource.quantity <= 0) {
+            const tile = this.getTile(x, y);
+            if (tile) {
+              tile.resource = undefined;
+            }
+          }
+
+          return extracted;
+        }
+
+        getTileSize() {
+          return this.tileSize;
+        }
+
+        setTileSize(size) {
+          this.tileSize = size;
+        }
+      }
+
+      class Camera {
+        constructor(x = 0, y = 0, width = 800, height = 600) {
+          this.position = { x, y };
+          this.zoom = 1;
+          this.minZoom = 0.5;
+          this.maxZoom = 3;
+          this.width = width;
+          this.height = height;
+        }
+
+        panBy(dx, dy) {
+          this.position.x += dx;
+          this.position.y += dy;
+        }
+
+        zoomAt(factor, cursorX, cursorY) {
+          const oldZoom = this.zoom;
+          this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom * factor));
+
+          const zoomChange = (this.zoom - oldZoom) / oldZoom;
+          this.position.x -= (cursorX / oldZoom) * zoomChange;
+          this.position.y -= (cursorY / oldZoom) * zoomChange;
+        }
+
+        setSize(width, height) {
+          this.width = width;
+          this.height = height;
+        }
+
+        worldToScreen(worldX, worldY) {
+          return {
+            x: (worldX - this.position.x) * this.zoom,
+            y: (worldY - this.position.y) * this.zoom,
+          };
+        }
+
+        screenToWorld(screenX, screenY) {
+          return {
+            x: screenX / this.zoom + this.position.x,
+            y: screenY / this.zoom + this.position.y,
+          };
+        }
+
+        isVisible(x, y, size) {
+          const screenPos = this.worldToScreen(x, y);
+          const screenSize = size * this.zoom;
+          return (
+            screenPos.x + screenSize > 0 &&
+            screenPos.x < this.width &&
+            screenPos.y + screenSize > 0 &&
+            screenPos.y < this.height
+          );
+        }
+      }
+
+      // ============================================================================
+      // SISTEMA DE RENDERIZADO
+      // ============================================================================
+
+      class Renderer {
+        constructor(canvasId, spriteCache) {
+          const canvas = document.getElementById(canvasId);
+          if (!canvas) {
+            throw new Error(`Canvas con id ${canvasId} no encontrado`);
+          }
+          this.canvas = canvas;
+          this.ctx = canvas.getContext("2d");
+          this.spriteCache = spriteCache;
+          this.resizeCanvas();
+          window.addEventListener("resize", () => this.resizeCanvas());
+        }
+
+        resizeCanvas() {
+          this.canvas.width = window.innerWidth;
+          this.canvas.height = window.innerHeight;
+        }
+
+        render(gameState, camera, grid) {
+          this.ctx.fillStyle = "#1a1a1a";
+          this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+          this.ctx.save();
+          this.ctx.scale(camera.zoom, camera.zoom);
+          this.ctx.translate(-camera.position.x, -camera.position.y);
+
+          this.renderGrid(grid, camera);
+          this.renderResourceNodes(grid, camera);
+          this.renderBuildings(gameState, camera);
+          this.renderResources(gameState);
+
+          if (gameState.selectedBuilding) {
+            this.renderBuildingSelection(gameState.selectedBuilding);
+          }
+
+          this.ctx.restore();
+
+          this.renderUI(gameState, camera);
+        }
+
+        renderGrid(grid, camera) {
+          const tileSize = grid.getTileSize();
+          const gridTiles = grid.getGrid();
+
+          for (let y = 0; y < gridTiles.length; y++) {
+            for (let x = 0; x < gridTiles[y].length; x++) {
+              if (camera.isVisible(x * tileSize, y * tileSize, tileSize)) {
+                this.ctx.fillStyle = "#1a5c1a";
+                this.ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+
+                this.ctx.strokeStyle = "#333";
+                this.ctx.lineWidth = 0.5 / camera.zoom;
+                this.ctx.strokeRect(x * tileSize, y * tileSize, tileSize, tileSize);
+              }
+            }
+          }
+        }
+
+        renderResourceNodes(grid, camera) {
+          const tileSize = grid.getTileSize();
+          const gridTiles = grid.getGrid();
+
+          for (let y = 0; y < gridTiles.length; y++) {
+            for (let x = 0; x < gridTiles[y].length; x++) {
+              const tile = gridTiles[y][x];
+              if (tile.resource && camera.isVisible(x * tileSize, y * tileSize, tileSize)) {
+                const sprite = this.spriteCache.getTerrainSprite(tile.resource.type);
+                this.ctx.drawImage(sprite, x * tileSize + 4, y * tileSize + 4, tileSize - 8, tileSize - 8);
+
+                this.ctx.fillStyle = "#fff";
+                this.ctx.font = `${Math.max(8 / camera.zoom, 6)}px Arial`;
+                this.ctx.textAlign = "right";
+                this.ctx.fillText(tile.resource.quantity.toString(), x * tileSize + tileSize - 2, y * tileSize + tileSize - 2);
+              }
+            }
+          }
+        }
+
+        renderBuildings(gameState, camera) {
+          const tileSize = 32;
+
+          for (const building of gameState.buildings.values()) {
+            const x = building.position.x * tileSize;
+            const y = building.position.y * tileSize;
+
+            if (camera.isVisible(x, y, tileSize)) {
+              const sprite = this.spriteCache.getBuildingSprite(building.type, building.direction);
+              this.ctx.drawImage(sprite, x, y, tileSize, tileSize);
+
+              // Mostrar estado activo
+              if (building.isActive) {
+                this.ctx.fillStyle = "rgba(0, 255, 0, 0.2)";
+                this.ctx.fillRect(x, y, tileSize, tileSize);
+
+                const animTime = (gameState.gameTime % 1000) / 1000;
+                this.ctx.strokeStyle = `rgba(0, 255, 0, ${0.5 + Math.sin(animTime * Math.PI * 2) * 0.3})`;
+                this.ctx.lineWidth = 2 / camera.zoom;
+                this.ctx.strokeRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+              }
+
+              // Mostrar progreso de receta
+              if (building.recipeProgress > 0 && building.recipeProgress < 1) {
+                this.ctx.fillStyle = "rgba(100, 200, 255, 0.3)";
+                this.ctx.fillRect(x, y - 8, tileSize * building.recipeProgress, 4);
+                this.ctx.strokeStyle = "rgba(100, 200, 255, 0.6)";
+                this.ctx.lineWidth = 1 / camera.zoom;
+                this.ctx.strokeRect(x, y - 8, tileSize, 4);
+              }
+
+              // Mostrar inventario
+              if (building.inventory.length > 0) {
+                if (building.type === BuildingType.STORAGE) {
+                  // Para almacenes: solo mostrar barra de capacidad
+                  const maxCapacity = 250;
+                  const capacity = (building.inventory.length / maxCapacity);
+                  this.ctx.fillStyle = "rgba(255, 100, 100, 0.5)";
+                  this.ctx.fillRect(x, y + tileSize - 4, tileSize * capacity, 4);
+                  this.ctx.strokeStyle = "rgba(255, 100, 100, 0.8)";
+                  this.ctx.lineWidth = 1 / camera.zoom;
+                  this.ctx.strokeRect(x, y + tileSize - 4, tileSize, 4);
+
+                } else if (building.type === BuildingType.CONVEYOR) {
+                  // Mostrar movimiento continuo de materiales en la cinta
+                  if (building.inventory.length > 0) {
+                    // Calcular dirección visual basada en la rotación
+                    const directions = [
+                      { dx: 0, dy: -1 }, // UP
+                      { dx: 1, dy: 0 },  // RIGHT
+                      { dx: 0, dy: 1 },  // DOWN
+                      { dx: -1, dy: 0 }  // LEFT
+                    ];
+                    const dir = directions[building.direction] || directions[1];
+                    
+                    // Animación de movimiento continuo (velocidad dividida por 2 = tiempo de 1000ms)
+                    const animTime = (gameState.gameTime / 1000) % 1;
+                    const itemsToShow = Math.min(building.inventory.length, 2);
+                    
+                    for (let i = 0; i < itemsToShow; i++) {
+                      const resource = building.inventory[i];
+                      const sprite = this.spriteCache.getResourceSprite(resource.type);
+                      
+                      // Posición animada a lo largo de la dirección con mayor espacio entre items
+                      const offset = (animTime + i * 0.5) % 1;
+                      const posX = x + tileSize / 2 + dir.dx * tileSize * (offset - 0.5) - 8;
+                      const posY = y + tileSize / 2 + dir.dy * tileSize * (offset - 0.5) - 8;
+                      
+                      this.ctx.drawImage(sprite, posX, posY, 16, 16);
+                    }
+                  }
+                  
+                } else {
+                  // Para mineros y fundiciones: mostrar número en esquina superior derecha
+                  const maxMinerCapacity = building.type === BuildingType.MINER ? 25 : 20;
+                  
+                  // Mostrar cantidad si hay - en esquina superior derecha con fondo negro
+                  if (building.inventory.length > 0) {
+                    const numStr = building.inventory.length.toString();
+                    const fontSize = Math.max(8 / camera.zoom, 6);
+                    this.ctx.font = `${fontSize}px Arial`;
+                    this.ctx.textAlign = "center";
+                    
+                    const padding = 2;
+                    const textWidth = 14;
+                    const textHeight = fontSize + 2;
+                    const rectX = x + tileSize - textWidth - padding;
+                    const rectY = y + padding;
+                    
+                    // Dibujar fondo negro
+                    this.ctx.fillStyle = "#000000";
+                    this.ctx.fillRect(rectX, rectY, textWidth, textHeight);
+                    
+                    // Dibujar número en blanco
+                    this.ctx.fillStyle = "#ffffff";
+                    this.ctx.fillText(numStr, x + tileSize - textWidth / 2 - padding, y + fontSize + padding);
+                  }
+
+                  // Barra de capacidad
+                  this.ctx.fillStyle = building.type === BuildingType.MINER ? "rgba(255, 150, 100, 0.4)" : "rgba(100, 200, 255, 0.4)";
+                  this.ctx.fillRect(x, y + tileSize - 3, tileSize * (building.inventory.length / maxMinerCapacity), 3);
+                  this.ctx.strokeStyle = building.type === BuildingType.MINER ? "rgba(255, 150, 100, 0.8)" : "rgba(100, 200, 255, 0.8)";
+                  this.ctx.lineWidth = 1 / camera.zoom;
+                  this.ctx.strokeRect(x, y + tileSize - 3, tileSize, 3);
+                }
+              }
+            }
+          }
+        }
+
+        renderResources(gameState) {
+          const tileSize = 32;
+
+          for (const resource of gameState.resources.values()) {
+            // NO renderizar recursos que están dentro de cintas (se muestran en la animación)
+            let isInConveyor = false;
+            for (const building of gameState.buildings.values()) {
+              if (building.type === BuildingType.CONVEYOR && building.inventory.includes(resource)) {
+                isInConveyor = true;
+                break;
+              }
+            }
+            
+            if (isInConveyor) {
+              continue; // Saltar este recurso, ya se dibuja en la animación de la cinta
+            }
+
+            const screenPos = {
+              x: resource.position.x * tileSize + 8,
+              y: resource.position.y * tileSize + 8,
+            };
+
+            if (resource.targetPosition) {
+              const targetScreen = {
+                x: resource.targetPosition.x * tileSize + 8,
+                y: resource.targetPosition.y * tileSize + 8,
+              };
+              screenPos.x = screenPos.x + (targetScreen.x - screenPos.x) * resource.progress;
+              screenPos.y = screenPos.y + (targetScreen.y - screenPos.y) * resource.progress;
+            }
+
+            const sprite = this.spriteCache.getResourceSprite(resource.type);
+            this.ctx.drawImage(sprite, screenPos.x - 8, screenPos.y - 8, 16, 16);
+          }
+        }
+
+        renderBuildingSelection(building) {
+          const tileSize = 32;
+          const x = building.position.x * tileSize;
+          const y = building.position.y * tileSize;
+
+          this.ctx.strokeStyle = "#00ff00";
+          this.ctx.lineWidth = 3;
+          this.ctx.strokeRect(x, y, tileSize, tileSize);
+        }
+
+        renderUI(gameState, camera) {
+          this.ctx.restore();
+          this.renderResourcePanel(gameState);
+          this.renderInfoPanel(gameState);
+          this.renderBuildingPanel();
+        }
+
+        renderResourcePanel(gameState) {
+          const panelHeight = 80;
+          const panelY = this.canvas.height - panelHeight;
+
+          this.ctx.fillStyle = "rgba(30, 30, 30, 0.95)";
+          this.ctx.fillRect(0, panelY, this.canvas.width, panelHeight);
+
+          this.ctx.strokeStyle = "#666";
+          this.ctx.lineWidth = 2;
+          this.ctx.strokeRect(0, panelY, this.canvas.width, panelHeight);
+
+          this.ctx.fillStyle = "#fff";
+          this.ctx.font = "bold 16px Arial";
+          this.ctx.textAlign = "left";
+          this.ctx.fillText("Recursos en Almacenes", 10, panelY + 25);
+
+          // Contar recursos en todos los almacenes
+          const storageCounts = {};
+          for (const building of gameState.buildings.values()) {
+            if (building.type === BuildingType.STORAGE) {
+              for (const resource of building.inventory) {
+                storageCounts[resource.type] = (storageCounts[resource.type] || 0) + 1;
+              }
+            }
+          }
+
+          const resourceEntries = Object.entries(storageCounts);
+          let xOffset = 220;
+
+          resourceEntries.forEach(([resourceType, amount]) => {
+            this.ctx.fillStyle = "#ccc";
+            this.ctx.font = "12px Arial";
+            this.ctx.fillText(`${resourceType}: ${amount}`, xOffset, panelY + 25);
+            xOffset += 150;
+          });
+
+          this.ctx.fillStyle = "#888";
+          this.ctx.font = "11px Arial";
+          this.ctx.textAlign = "right";
+          this.ctx.fillText(
+            "M:Minero | C:Cinta | A:Almacén | F:Fundición | Espacio:Pausa | S:Guardar",
+            this.canvas.width - 10,
+            panelY + 25
+          );
+        }
+
+        renderInfoPanel(gameState) {
+          if (!gameState.selectedBuilding) return;
+
+          const building = gameState.selectedBuilding;
+          
+          // Panel más grande y reutilizable
+          const panelWidth = Math.floor(this.canvas.width * 0.35);  // 35% del ancho
+          const panelHeight = Math.floor(this.canvas.height * 0.85); // 85% del alto
+          const panelX = this.canvas.width - panelWidth;
+          const panelY = 10;
+
+          // Fondo del panel
+          this.ctx.fillStyle = "rgba(30, 30, 30, 0.95)";
+          this.ctx.fillRect(panelX, panelY, panelWidth, panelHeight);
+
+          // Borde del panel
+          this.ctx.strokeStyle = "#666";
+          this.ctx.lineWidth = 2;
+          this.ctx.strokeRect(panelX, panelY, panelWidth, panelHeight);
+
+          // Inicializar posición para contenido
+          const padding = 15;
+          let contentX = panelX + padding;
+          let contentY = panelY + padding;
+          const contentWidth = panelWidth - padding * 2;
+
+          // Título (tipo de edificio)
+          this.ctx.fillStyle = "#fff";
+          this.ctx.font = "bold 16px Arial";
+          this.ctx.textAlign = "left";
+          this.ctx.fillText(`${building.type.toUpperCase()}`, contentX, contentY);
+          contentY += 28;
+
+          // Información básica
+          this.ctx.fillStyle = "#ccc";
+          this.ctx.font = "12px Arial";
+          
+          // Posición
+          this.ctx.fillText(`Posición: (${building.position.x}, ${building.position.y})`, contentX, contentY);
+          contentY += 18;
+          
+          // Salud
+          this.ctx.fillText(`Salud: ${building.health}/${building.maxHealth}`, contentX, contentY);
+          contentY += 18;
+          
+          contentY += 10; // Espaciador
+          
+          // Sección específica por tipo de edificio
+          if (building.type === BuildingType.CONVEYOR) {
+            this.renderConveyorPanel(building, contentX, contentY, contentWidth);
+          } else if (building.type === BuildingType.SMELTER) {
+            this.renderSmelterPanel(building, contentX, contentY, contentWidth);
+          } else if (building.type === BuildingType.ASSEMBLER) {
+            this.renderAssemblerPanel(building, contentX, contentY, contentWidth);
+          } else {
+            this.renderGenericInventoryPanel(building, contentX, contentY, contentWidth);
+          }
+        }
+
+        renderConveyorPanel(building, x, y, width) {
+          const directions = ["↑", "→", "↓", "←"];
+          
+          this.ctx.fillStyle = "#ccc";
+          this.ctx.font = "12px Arial";
+          this.ctx.fillText(`Dirección: ${directions[building.direction]}`, x, y);
+          y += 25;
+          
+          this.ctx.fillText("Rotar dirección:", x, y);
+          y += 20;
+          
+          // Botones de dirección
+          this.ctx.fillStyle = "#666";
+          this.ctx.strokeStyle = "#999";
+          this.ctx.lineWidth = 1;
+          const btnWidth = 50;
+          const btnHeight = 20;
+          const spacing = 65;
+          
+          // UP
+          this.ctx.fillRect(x, y, btnWidth, btnHeight);
+          this.ctx.strokeRect(x, y, btnWidth, btnHeight);
+          this.ctx.fillStyle = building.direction === Direction.UP ? "#00ff00" : "#fff";
+          this.ctx.font = "11px Arial";
+          this.ctx.textAlign = "center";
+          this.ctx.fillText("↑ UP", x + btnWidth / 2, y + 14);
+          
+          // RIGHT
+          this.ctx.fillStyle = "#666";
+          this.ctx.fillRect(x + spacing, y, btnWidth, btnHeight);
+          this.ctx.strokeStyle = "#999";
+          this.ctx.strokeRect(x + spacing, y, btnWidth, btnHeight);
+          this.ctx.fillStyle = building.direction === Direction.RIGHT ? "#00ff00" : "#fff";
+          this.ctx.fillText("→ RGT", x + spacing + btnWidth / 2, y + 14);
+          
+          y += 30;
+          
+          // DOWN
+          this.ctx.fillStyle = "#666";
+          this.ctx.fillRect(x, y, btnWidth, btnHeight);
+          this.ctx.strokeStyle = "#999";
+          this.ctx.strokeRect(x, y, btnWidth, btnHeight);
+          this.ctx.fillStyle = building.direction === Direction.DOWN ? "#00ff00" : "#fff";
+          this.ctx.fillText("↓ DWN", x + btnWidth / 2, y + 14);
+          
+          // LEFT
+          this.ctx.fillStyle = "#666";
+          this.ctx.fillRect(x + spacing, y, btnWidth, btnHeight);
+          this.ctx.strokeStyle = "#999";
+          this.ctx.strokeRect(x + spacing, y, btnWidth, btnHeight);
+          this.ctx.fillStyle = building.direction === Direction.LEFT ? "#00ff00" : "#fff";
+          this.ctx.fillText("← LFT", x + spacing + btnWidth / 2, y + 14);
+        }
+
+        renderSmelterPanel(building, x, y, width) {
+          this.ctx.fillStyle = "#ccc";
+          this.ctx.font = "11px Arial";
+          this.ctx.textAlign = "left";
+          
+          const fuelCount = building.fuelInventory ? building.fuelInventory.length : 0;
+          const materialCount = building.materialInventory ? building.materialInventory.length : 0;
+          
+          // Combustible
+          this.ctx.fillText("Combustible:", x, y);
+          if (fuelCount > 0) {
+            const fuelSprite = this.spriteCache.getResourceSprite(ResourceType.COAL);
+            this.ctx.drawImage(fuelSprite, x, y - 12, 14, 14);
+            this.ctx.fillText(`${fuelCount}`, x + 20, y);
+          } else {
+            this.ctx.fillText(`${fuelCount}`, x + 20, y);
+          }
+          y += 25;
+          
+          // Material
+          this.ctx.fillText("Material:", x, y);
+          if (materialCount > 0 && building.materialInventory.length > 0) {
+            const materialType = building.materialInventory[0].type;
+            const materialSprite = this.spriteCache.getResourceSprite(materialType);
+            this.ctx.drawImage(materialSprite, x, y - 12, 14, 14);
+            this.ctx.fillText(`${materialCount}`, x + 20, y);
+          } else {
+            this.ctx.fillText(`${materialCount}`, x + 20, y);
+          }
+          y += 25;
+          
+          // Producto
+          this.ctx.fillText("Producto:", x, y);
+          if (building.inventory.length > 0) {
+            const productSprite = this.spriteCache.getResourceSprite(building.inventory[0].type);
+            this.ctx.drawImage(productSprite, x, y - 12, 14, 14);
+            this.ctx.fillText(`${building.inventory.length}`, x + 20, y);
+          } else {
+            this.ctx.fillText(`${building.inventory.length}`, x + 20, y);
+          }
+        }
+
+        renderAssemblerPanel(building, x, y, width) {
+          this.ctx.fillStyle = "#ccc";
+          this.ctx.font = "12px Arial";
+          this.ctx.textAlign = "left";
+          
+          // Seleccionar receta
+          this.ctx.fillText("Seleccionar receta:", x, y);
+          y += 25;
+          
+          const recipes = [
+            { name: "Cable", value: "cable", color: "#FFD700" },
+            { name: "Bobina", value: "coil", color: "#FF6B6B" },
+            { name: "Piezas Const.", value: "construction_parts", color: "#87CEEB" }
+          ];
+          
+          const btnWidth = Math.floor((width - 10) / 2);
+          const btnHeight = 22;
+          const btnSpacingX = 10;
+          const btnSpacingY = 28;
+          
+          for (let i = 0; i < recipes.length; i++) {
+            const recipe = recipes[i];
+            const btnX = x + (i % 2) * (btnWidth + btnSpacingX);
+            const btnY = y + Math.floor(i / 2) * btnSpacingY;
+            
+            const isSelected = building.selectedRecipe === recipe.value;
+            this.ctx.fillStyle = isSelected ? recipe.color : "#555";
+            this.ctx.fillRect(btnX, btnY, btnWidth, btnHeight);
+            this.ctx.strokeStyle = isSelected ? "#fff" : "#999";
+            this.ctx.lineWidth = 2;
+            this.ctx.strokeRect(btnX, btnY, btnWidth, btnHeight);
+            
+            this.ctx.fillStyle = isSelected ? "#000" : "#fff";
+            this.ctx.font = "11px Arial";
+            this.ctx.textAlign = "center";
+            this.ctx.fillText(recipe.name, btnX + btnWidth / 2, btnY + 16);
+          }
+          
+          y += 100;
+          
+          // Inventarios
+          this.ctx.fillStyle = "#ccc";
+          this.ctx.font = "12px Arial";
+          this.ctx.textAlign = "left";
+          
+          // Entrada
+          this.ctx.fillText("Entrada:", x, y);
+          if (building.inputInventory && building.inputInventory.length > 0) {
+            y += 18;
+            const resourcesMap = {};
+            for (const resource of building.inputInventory) {
+              resourcesMap[resource.type] = (resourcesMap[resource.type] || 0) + 1;
+            }
+            this.ctx.font = "11px Arial";
+            for (const [type, count] of Object.entries(resourcesMap)) {
+              const sprite = this.spriteCache.getResourceSprite(type);
+              this.ctx.drawImage(sprite, x, y - 11, 12, 12);
+              this.ctx.fillText(`${count}`, x + 18, y);
+              y += 16;
+            }
+          } else {
+            this.ctx.fillText("(vacío)", x + 80, y);
+            y += 18;
+          }
+          
+          y += 10;
+          
+          // Salida
+          this.ctx.fillStyle = "#ccc";
+          this.ctx.font = "12px Arial";
+          this.ctx.fillText("Salida:", x, y);
+          if (building.outputInventory && building.outputInventory.length > 0) {
+            y += 18;
+            const resourcesMap = {};
+            for (const resource of building.outputInventory) {
+              resourcesMap[resource.type] = (resourcesMap[resource.type] || 0) + 1;
+            }
+            this.ctx.font = "11px Arial";
+            for (const [type, count] of Object.entries(resourcesMap)) {
+              const sprite = this.spriteCache.getResourceSprite(type);
+              this.ctx.drawImage(sprite, x, y - 11, 12, 12);
+              this.ctx.fillText(`${count}`, x + 18, y);
+              y += 16;
+            }
+          } else {
+            this.ctx.fillText("(vacío)", x + 80, y);
+            y += 18;
+          }
+          
+          y += 10;
+          
+          // Estado
+          this.ctx.fillStyle = building.isActive ? "#00ff00" : "#ff4444";
+          this.ctx.font = "12px Arial";
+          const statusText = building.isActive ? "✓ Activo" : "✗ Inactivo";
+          this.ctx.fillText(`Estado: ${statusText}`, x, y);
+          if (building.selectedRecipe) {
+            y += 18;
+            this.ctx.fillStyle = "#888";
+            this.ctx.fillText(`Progreso: ${(building.recipeProgress * 100).toFixed(0)}%`, x, y);
+          }
+        }
+
+        renderGenericInventoryPanel(building, x, y, width) {
+          this.ctx.fillStyle = "#ccc";
+          this.ctx.font = "12px Arial";
+          this.ctx.textAlign = "left";
+
+          this.ctx.fillText("Inventario:", x, y);
+          y += 18;
+
+          const resourceCounts = {};
+          const inventory = Array.isArray(building.inventory) ? building.inventory : [];
+          for (const resource of inventory) {
+            resourceCounts[resource.type] = (resourceCounts[resource.type] || 0) + 1;
+          }
+
+          if (Object.keys(resourceCounts).length === 0) {
+            this.ctx.fillStyle = "#888";
+            this.ctx.fillText("(vacío)", x, y);
+            y += 18;
+          } else {
+            this.ctx.fillStyle = "#ccc";
+            this.ctx.font = "11px Arial";
+            for (const [resourceType, count] of Object.entries(resourceCounts)) {
+              const sprite = this.spriteCache.getResourceSprite(resourceType);
+              this.ctx.drawImage(sprite, x, y - 11, 12, 12);
+              this.ctx.fillText(`${resourceType}: ${count}`, x + 18, y);
+              y += 16;
+            }
+          }
+
+          y += 12;
+          this.ctx.fillStyle = building.isActive ? "#00ff00" : "#ff4444";
+          this.ctx.font = "12px Arial";
+          this.ctx.fillText(`Estado: ${building.isActive ? "✓ Activo" : "✗ Inactivo"}`, x, y);
+
+          // Mostrar inventario de salida si existe
+          if (building.outputInventory && building.outputInventory.length > 0) {
+            y += 18;
+            this.ctx.fillStyle = "#ffff00";
+            this.ctx.font = "11px Arial";
+            const outputCounts = {};
+            for (const resource of building.outputInventory) {
+              outputCounts[resource.type] = (outputCounts[resource.type] || 0) + 1;
+            }
+            this.ctx.fillText("Salida:", x, y);
+            y += 14;
+            for (const [resourceType, count] of Object.entries(outputCounts)) {
+              const sprite = this.spriteCache.getResourceSprite(resourceType);
+              this.ctx.drawImage(sprite, x, y - 9, 10, 10);
+              this.ctx.fillText(`${resourceType}: ${count}`, x + 15, y);
+              y += 12;
+            }
+          }
+        }
+
+        renderBuildingPanel() {
+          const panelWidth = 200;
+          const panelHeight = 330;
+
+          this.ctx.fillStyle = "rgba(30, 30, 30, 0.95)";
+          this.ctx.fillRect(10, 10, panelWidth, panelHeight);
+
+          this.ctx.strokeStyle = "#666";
+          this.ctx.lineWidth = 2;
+          this.ctx.strokeRect(10, 10, panelWidth, panelHeight);
+
+          this.ctx.fillStyle = "#fff";
+          this.ctx.font = "bold 14px Arial";
+          this.ctx.textAlign = "left";
+          this.ctx.fillText("Edificios", 20, 35);
+
+          const buildings = [
+            { name: "Minero", key: "M" },
+            { name: "Cinta", key: "C" },
+            { name: "Almacén", key: "A" },
+            { name: "Fundición", key: "F" },
+            { name: "Ensamblador", key: "E" },
+          ];
+
+          this.ctx.fillStyle = "#aaa";
+          this.ctx.font = "11px Arial";
+          buildings.forEach((building, index) => {
+            this.ctx.fillText(`[${building.key}] ${building.name}`, 20, 60 + index * 25);
+          });
+        }
+      }
+
+      // ============================================================================
+      // BUCLE DEL JUEGO
+      // ============================================================================
+
+      class GameLoop {
+        constructor(canvasId) {
+          this.spriteCache = new SpriteCache();
+          this.gridSystem = new GridSystem(40, 40);
+          this.camera = new Camera(0, 0, window.innerWidth, window.innerHeight);
+
+          this.renderer = new Renderer(canvasId, this.spriteCache);
+
+          this.gameState = {
+            buildings: new Map(),
+            resources: new Map(),
+            playerInventory: {
+              iron: 0,
+              copper: 0,
+              coal: 0,
+              iron_plate: 0,
+              copper_plate: 0,
+            },
+            grid: this.gridSystem.getGrid(),
+            camera: this.camera.position,
+            gameTime: 0,
+            isPaused: false,
+          };
+
+          this.running = false;
+          this.animationFrameId = null;
+          this.lastFrameTime = 0;
+          this.deltaTime = 0;
+          this.tickCounter = 0;
+          this.tickRate = 10;
+          this.placementMode = null;
+
+          this.setupInputHandlers();
+          this.loadGame();
+        }
+
+        setupInputHandlers() {
+          const canvas = document.querySelector("canvas");
+          if (!canvas) return;
+
+          canvas.addEventListener("click", (e) => this.handleCanvasClick(e));
+          canvas.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            this.placementMode = null;
+          });
+
+          canvas.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            const factor = e.deltaY > 0 ? 0.8 : 1.2;
+            const rect = canvas.getBoundingClientRect();
+            const cursorX = e.clientX - rect.left;
+            const cursorY = e.clientY - rect.top;
+            this.camera.zoomAt(factor, cursorX, cursorY);
+          });
+
+          // Rueda central para eliminar
+          canvas.addEventListener("mousedown", (e) => {
+            if (e.button === 1) { // Rueda central
+              e.preventDefault();
+              const rect = canvas.getBoundingClientRect();
+              const screenX = e.clientX - rect.left;
+              const screenY = e.clientY - rect.top;
+              const worldPos = this.camera.screenToWorld(screenX, screenY);
+              const gridX = Math.floor(worldPos.x / 32);
+              const gridY = Math.floor(worldPos.y / 32);
+              
+              const building = this.gridSystem.getBuildingAt(gridX, gridY);
+              if (building) {
+                // Purgar todos los materiales del edificio (eliminarlos sin soltarlos)
+                let itemsDeleted = 0;
+                
+                // Eliminar recursos de inventario principal
+                if (building.inventory && building.inventory.length > 0) {
+                  for (const resource of building.inventory) {
+                    this.gameState.resources.delete(resource.id);
+                    itemsDeleted++;
+                  }
+                }
+                
+                // Para fundiciones, también eliminar combustible y material
+                if (building.type === BuildingType.SMELTER) {
+                  if (building.fuelInventory && building.fuelInventory.length > 0) {
+                    for (const resource of building.fuelInventory) {
+                      this.gameState.resources.delete(resource.id);
+                      itemsDeleted++;
+                    }
+                  }
+                  if (building.materialInventory && building.materialInventory.length > 0) {
+                    for (const resource of building.materialInventory) {
+                      this.gameState.resources.delete(resource.id);
+                      itemsDeleted++;
+                    }
+                  }
+                }
+                
+                // Eliminar el edificio
+                this.gridSystem.removeBuilding(gridX, gridY);
+                this.gameState.buildings.delete(building.id);
+                this.gameState.selectedBuilding = undefined;
+                
+                logger.info(`🗑️ ${building.type} eliminado en (${gridX}, ${gridY}) - ${itemsDeleted} items purgados`);
+              }
+            }
+          });
+
+          document.addEventListener("keydown", (e) => this.handleKeyDown(e));
+
+          let isDragging = false;
+          let lastX = 0;
+          let lastY = 0;
+
+          canvas.addEventListener("mousedown", (e) => {
+            if (e.button === 2) { // Click derecho para pan
+              isDragging = true;
+              lastX = e.clientX;
+              lastY = e.clientY;
+            }
+          });
+
+          canvas.addEventListener("mousemove", (e) => {
+            if (isDragging) {
+              const dx = (e.clientX - lastX) / this.camera.zoom;
+              const dy = (e.clientY - lastY) / this.camera.zoom;
+              this.camera.panBy(-dx, -dy);
+              lastX = e.clientX;
+              lastY = e.clientY;
+            }
+          });
+
+          canvas.addEventListener("mouseup", () => {
+            isDragging = false;
+          });
+
+          // Actualizar tamaño de cámara cuando se redimensiona
+          window.addEventListener("resize", () => {
+            this.camera.setSize(window.innerWidth, window.innerHeight);
+          });
+        }
+
+        handleCanvasClick(event) {
+          const canvas = event.target;
+          const rect = canvas.getBoundingClientRect();
+          const screenX = event.clientX - rect.left;
+          const screenY = event.clientY - rect.top;
+          const worldPos = this.camera.screenToWorld(screenX, screenY);
+
+          const gridX = Math.floor(worldPos.x / 32);
+          const gridY = Math.floor(worldPos.y / 32);
+
+          const panelWidth = Math.floor(this.renderer.canvas.width * 0.35);
+          const panelHeight = Math.floor(this.renderer.canvas.height * 0.85);
+          const panelX = this.renderer.canvas.width - panelWidth;
+          const panelY = 10;
+          const contentX = panelX + 15;
+          const contentY = panelY + 15 + 28 + 18 + 18 + 10;
+
+          // Verificar clics en botones de dirección
+          if (this.gameState.selectedBuilding && this.gameState.selectedBuilding.type === BuildingType.CONVEYOR) {
+            const x = contentX;
+            const y = contentY + 25 + 20; // Dirección + "Rotar dirección"
+            const btnWidth = 50;
+            const btnHeight = 20;
+            const spacing = 65;
+
+            // UP button
+            if (screenX >= x && screenX <= x + btnWidth && screenY >= y && screenY <= y + btnHeight) {
+              this.gameState.selectedBuilding.direction = Direction.UP;
+              console.log("Dirección: ↑ UP");
+              return;
+            }
+            // RIGHT button
+            if (screenX >= x + spacing && screenX <= x + spacing + btnWidth && screenY >= y && screenY <= y + btnHeight) {
+              this.gameState.selectedBuilding.direction = Direction.RIGHT;
+              console.log("Dirección: → RIGHT");
+              return;
+            }
+            // DOWN button
+            if (screenX >= x && screenX <= x + btnWidth && screenY >= y + 30 && screenY <= y + 50) {
+              this.gameState.selectedBuilding.direction = Direction.DOWN;
+              console.log("Dirección: ↓ DOWN");
+              return;
+            }
+            // LEFT button
+            if (screenX >= x + spacing && screenX <= x + spacing + btnWidth && screenY >= y + 30 && screenY <= y + 50) {
+              this.gameState.selectedBuilding.direction = Direction.LEFT;
+              console.log("Dirección: ← LEFT");
+              return;
+            }
+          }
+
+          // Verificar clics en botones de receta del ensamblador
+          if (this.gameState.selectedBuilding && this.gameState.selectedBuilding.type === BuildingType.ASSEMBLER) {
+            const x = contentX;
+            const y = contentY + 25; // Después de "Seleccionar receta:"
+            const btnWidth = Math.floor((panelWidth - 40) / 2);
+            const btnHeight = 22;
+            const spacing = 10;
+
+            const recipes = [
+              { name: "Cable", value: "cable" },
+              { name: "Bobina", value: "coil" },
+              { name: "Piezas Const.", value: "construction_parts" }
+            ];
+
+            for (let i = 0; i < recipes.length; i++) {
+              const recipe = recipes[i];
+              const btnX = x + (i % 2) * (btnWidth + spacing);
+              const btnY = y + Math.floor(i / 2) * 28;
+
+              if (screenX >= btnX && screenX <= btnX + btnWidth && screenY >= btnY && screenY <= btnY + btnHeight) {
+                this.gameState.selectedBuilding.selectedRecipe = recipe.value;
+                this.gameState.selectedBuilding.recipeProgress = 0;
+                return;
+              }
+            }
+          }
+
+          if (this.placementMode) {
+            // Verificar si se puede colocar
+            if (!this.gridSystem.canPlaceBuilding(gridX, gridY)) {
+              console.log("❌ No se puede colocar aquí (ocupado)");
+              this.placementMode = null;
+              return;
+            }
+            
+            const success = this.placeBuilding(this.placementMode, gridX, gridY);
+            if (!success) {
+              console.log("❌ Error al colocar edificio");
+            }
+            this.placementMode = null;
+            return;
+          }
+
+          // Verificar si el clic fue dentro del panel (para no cerrarlo)
+          if (this.gameState.selectedBuilding) {
+            // Si el clic estuvo dentro del panel, no hacer nada (ya se procesó arriba)
+            if (screenX >= panelX && screenX <= this.renderer.canvas.width && 
+                screenY >= panelY && screenY <= panelY + panelHeight) {
+              return;
+            }
+          }
+
+          const building = this.gridSystem.getBuildingAt(gridX, gridY);
+          if (building) {
+            this.gameState.selectedBuilding = building;
+          } else {
+            this.gameState.selectedBuilding = undefined;
+          }
+        }
+
+        handleKeyDown(event) {
+          const key = event.key.toUpperCase();
+
+          if (key === "M") {
+            this.placementMode = BuildingType.MINER;
+          } else if (key === "C") {
+            this.placementMode = BuildingType.CONVEYOR;
+          } else if (key === "A") {
+            this.placementMode = BuildingType.STORAGE;
+          } else if (key === "F") {
+            this.placementMode = BuildingType.SMELTER;
+          } else if (key === "E") {
+            this.placementMode = BuildingType.ASSEMBLER;
+          } else if (key === " ") {
+            this.gameState.isPaused = !this.gameState.isPaused;
+          } else if (key === "S") {
+            this.saveGame();
+            console.log("Partida guardada");
+          } else if (key === "R") {
+            // Rotar dirección de cinta seleccionada
+            if (this.gameState.selectedBuilding && this.gameState.selectedBuilding.type === BuildingType.CONVEYOR) {
+              this.gameState.selectedBuilding.direction = (this.gameState.selectedBuilding.direction + 1) % 4;
+              console.log("Cinta rotada");
+            }
+          }
+        }
+
+        changeConveyorDirection(building, direction) {
+          if (building.type === BuildingType.CONVEYOR) {
+            building.direction = direction;
+            console.log(`Dirección cinta cambiada a: ${["↑", "→", "↓", "←"][direction]}`);
+          }
+        }
+
+        placeBuilding(type, gridX, gridY) {
+          if (!this.gridSystem.canPlaceBuilding(gridX, gridY)) {
+            return false;
+          }
+
+          const building = {
+            id: `${type}_${Date.now()}`,
+            type,
+            position: { x: gridX, y: gridY },
+            direction: Direction.RIGHT,
+            inputs: [],
+            outputs: [],
+            inventory: [],
+            outputInventory: [],
+            recipeProgress: 0,
+            isActive: true,
+            health: 100,
+            maxHealth: 100,
+          };
+
+          // Para fundiciones, agregar inventarios separados
+          if (type === BuildingType.SMELTER) {
+            building.fuelInventory = []; // Carbón
+            building.materialInventory = []; // Hierro u otros materiales
+          }
+
+          // Para ensambladores, agregar propiedad de receta
+          if (type === BuildingType.ASSEMBLER) {
+            building.selectedRecipe = null; // null, "cable", "coil", o "construction_parts"
+            building.inputInventory = []; // Inventario de entrada (recibe de cintas)
+            building.outputInventory = []; // Inventario de salida (productos de la receta)
+            building.recipeProgress = 0; // Progreso de la receta actual
+            building.isActive = false; // Indica si está procesando
+            building.inventory = []; // Mantener para compatibilidad, pero usar inputInventory
+          }
+
+          this.gridSystem.placeBuilding(gridX, gridY, building);
+          this.gameState.buildings.set(building.id, building);
+          this.gameState.selectedBuilding = building;
+          console.log(`✅ ${type} colocado en (${gridX}, ${gridY})`);
+          return true;
+        }
+
+        update(deltaTime) {
+          if (this.gameState.isPaused) return;
+
+          this.deltaTime = deltaTime;
+          this.tickCounter += deltaTime;
+
+          this.gameState.gameTime += deltaTime;
+
+          const tickDuration = 1000 / this.tickRate;
+          while (this.tickCounter >= tickDuration) {
+            this.updateTick();
+            this.tickCounter -= tickDuration;
+          }
+        }
+
+        updateTick() {
+          logger.tick();
+          
+          try {
+            // PRIMERO: Extraer recursos (mineros) y procesar (fundiciones)
+            for (const building of this.gameState.buildings.values()) {
+              this.updateBuilding(building);
+            }
+
+            // SEGUNDO: Recolectar inputs de fundiciones y ensambladores ANTES de que cintas transfieran
+            for (const building of this.gameState.buildings.values()) {
+              if (building.type === BuildingType.SMELTER) {
+                this.collectSmelterInputs(building);
+              }
+            }
+
+            for (const building of this.gameState.buildings.values()) {
+              if (building.type === BuildingType.ASSEMBLER) {
+                this.collectAssemblerInputs(building);
+              }
+            }
+
+            // Log de estado general
+            let totalResources = 0;
+            let resourcesByType = {};
+            for (const resource of this.gameState.resources.values()) {
+              totalResources++;
+              resourcesByType[resource.type] = (resourcesByType[resource.type] || 0) + 1;
+            }
+            logger.debug(`📊 Recursos en mundo: total=${totalResources}, tipos=${JSON.stringify(resourcesByType)}`);
+
+            // TERCERO: Procesar cintas para transferir entre cintas (DESPUÉS de que edificios recolectaron)
+            for (const building of this.gameState.buildings.values()) {
+              if (building.type === BuildingType.CONVEYOR) {
+                this.processConveyorBelt(building);
+              }
+            }
+
+            // CUARTO: Procesar ensambladores
+            for (const building of this.gameState.buildings.values()) {
+              if (building.type === BuildingType.ASSEMBLER) {
+                this.processAssembler(building);
+              }
+            }
+
+            // QUINTO: Transferir productos de fundiciones y ensambladores
+            for (const building of this.gameState.buildings.values()) {
+              if (building.type === BuildingType.SMELTER) {
+                this.transferSmelterProducts(building);
+              }
+            }
+
+            // Transferir productos de ensambladores
+            for (const building of this.gameState.buildings.values()) {
+              if (building.type === BuildingType.ASSEMBLER) {
+                this.transferAssemblerProducts(building);
+              }
+            }
+
+            // SEXTO: Transferir contenido del almacén a cintas adyacentes
+            for (const building of this.gameState.buildings.values()) {
+              if (building.type === BuildingType.STORAGE) {
+                this.transferStorageProducts(building);
+              }
+            }
+
+            // Limpiar recursos huérfanos que no estén en ningún inventario
+            this.cleanOrphanedResources();
+          } catch (e) {
+            logger.error(`❌ Error en updateTick: ${e.message}`);
+            console.error(e);
+          }
+        }
+
+        cleanOrphanedResources() {
+          // Construir conjunto de todos los recursos que están en inventarios
+          const resourcesInInventories = new Set();
+
+          // Recursos en edificios
+          for (const building of this.gameState.buildings.values()) {
+            if (building.inventory && Array.isArray(building.inventory)) {
+              for (const resource of building.inventory) {
+                resourcesInInventories.add(resource.id);
+              }
+            }
+            if (building.fuelInventory && Array.isArray(building.fuelInventory)) {
+              for (const resource of building.fuelInventory) {
+                resourcesInInventories.add(resource.id);
+              }
+            }
+            if (building.materialInventory && Array.isArray(building.materialInventory)) {
+              for (const resource of building.materialInventory) {
+                resourcesInInventories.add(resource.id);
+              }
+            }
+            if (building.outputInventory && Array.isArray(building.outputInventory)) {
+              for (const resource of building.outputInventory) {
+                resourcesInInventories.add(resource.id);
+              }
+            }
+            if (building.inputInventory && Array.isArray(building.inputInventory)) {
+              for (const resource of building.inputInventory) {
+                resourcesInInventories.add(resource.id);
+              }
+            }
+          }
+
+          // Recursos en inventario del jugador
+          if (this.gameState.playerInventory && Array.isArray(this.gameState.playerInventory)) {
+            for (const resource of this.gameState.playerInventory) {
+              resourcesInInventories.add(resource.id);
+            }
+          }
+
+          // Eliminar recursos huérfanos (existen en gameState.resources pero no en ningún inventario)
+          let orphanCount = 0;
+          for (const resource of this.gameState.resources.values()) {
+            if (!resourcesInInventories.has(resource.id)) {
+              this.gameState.resources.delete(resource.id);
+              orphanCount++;
+            }
+          }
+
+          if (orphanCount > 0) {
+            logger.warn(`⚠️ Limpiados ${orphanCount} recursos huérfanos flotantes`);
+          }
+        }
+
+        collectSmelterInputs(smelter) {
+          try {
+            // Capacidades separadas para combustible, material y producto
+            const maxFuelCapacity = 10;
+            const maxMaterialCapacity = 10;
+            const maxProductCapacity = 10;
+
+            let fuelCount = smelter.fuelInventory?.length || 0;
+            let materialCount = smelter.materialInventory?.length || 0;
+            let productCount = smelter.inventory?.length || 0;
+
+            // Si está completamente lleno, no recolectar
+            if (fuelCount >= maxFuelCapacity && materialCount >= maxMaterialCapacity && productCount >= maxProductCapacity) {
+              return;
+            }
+
+            // Mapeo de posiciones a las direcciones que debería tener la cinta para apuntar hacia la fundición
+            const adjacentChecks = [
+              { pos: { x: smelter.position.x, y: smelter.position.y - 1 }, requiredDir: Direction.DOWN },  // Arriba → cinta apunta DOWN
+              { pos: { x: smelter.position.x + 1, y: smelter.position.y }, requiredDir: Direction.LEFT },  // Derecha → cinta apunta LEFT
+              { pos: { x: smelter.position.x, y: smelter.position.y + 1 }, requiredDir: Direction.UP },    // Abajo → cinta apunta UP
+              { pos: { x: smelter.position.x - 1, y: smelter.position.y }, requiredDir: Direction.RIGHT }, // Izquierda → cinta apunta RIGHT
+            ];
+
+            let itemsCollected = 0;
+            const maxIterations = 4; // Seguridad
+            let iterations = 0;
+            
+            for (const check of adjacentChecks) {
+              if (iterations++ > maxIterations) {
+                logger.warn(`⚠️ Límite de iteraciones alcanzado en smelter (${smelter.position.x},${smelter.position.y})`);
+                break;
+              }
+              
+              const adjacentBuilding = this.gridSystem.getBuildingAt(check.pos.x, check.pos.y);
+              // Solo recolectar de cintas que apunten HACIA la fundición
+              if (adjacentBuilding && adjacentBuilding.type === BuildingType.CONVEYOR && 
+                  adjacentBuilding.direction === check.requiredDir &&
+                  adjacentBuilding.inventory.length > 0) {
+                const resource = adjacentBuilding.inventory[0]; // Peek, no shift yet
+                let canAdd = false;
+
+                if (resource.type === ResourceType.COAL) {
+                  if (fuelCount + itemsCollected < maxFuelCapacity) {
+                    canAdd = true;
+                    adjacentBuilding.inventory.shift();
+                    smelter.fuelInventory.push(resource);
+                    fuelCount++;
+                    itemsCollected++;
+                  }
+                } else if (resource.type === ResourceType.IRON || resource.type === ResourceType.COPPER) {
+                  if (materialCount + itemsCollected < maxMaterialCapacity) {
+                    canAdd = true;
+                    adjacentBuilding.inventory.shift();
+                    smelter.materialInventory.push(resource);
+                    materialCount++;
+                    itemsCollected++;
+                  }
+                }
+
+                if (canAdd) {
+                  resource.position = { x: smelter.position.x, y: smelter.position.y };
+                }
+              }
+            }
+
+            if (itemsCollected > 0) {
+              logger.debug(`✅ Smelter (${smelter.position.x},${smelter.position.y}) recopiló ${itemsCollected} items`);
+            }
+          } catch (e) {
+            logger.error(`❌ Error en collectSmelterInputs: ${e.message}`);
+            console.error(e);
+          }
+        }
+
+        updateBuilding(building) {
+          // Migración: asegurar que ensambladores existentes tengan inputInventory
+          if (building.type === BuildingType.ASSEMBLER && !building.inputInventory) {
+            building.inputInventory = building.inventory || [];
+            building.inventory = [];
+          }
+
+          switch (building.type) {
+            case BuildingType.MINER:
+              this.updateMiner(building);
+              break;
+            case BuildingType.SMELTER:
+              this.updateSmelter(building);
+              break;
+          }
+        }
+
+        updateMiner(building) {
+          if (!building.isActive) return;
+
+          // Limite de 25 items en el minero
+          const maxMinerCapacity = 25;
+          if (building.inventory.length >= maxMinerCapacity) {
+            return;
+          }
+
+          const tile = this.gridSystem.getTile(building.position.x, building.position.y);
+          if (!tile || !tile.resource) return;
+
+          const extracted = this.gridSystem.extractResource(building.position.x, building.position.y, 2);
+
+          if (extracted > 0) {
+            for (let i = 0; i < extracted; i++) {
+              if (building.inventory.length >= maxMinerCapacity) break;
+              
+              const resource = {
+                id: `res_${Date.now()}_${i}_${Math.random()}`,
+                type: tile.resource.type,
+                position: { x: building.position.x, y: building.position.y },
+                progress: 0,
+                onConveyor: false,
+              };
+              this.gameState.resources.set(resource.id, resource);
+              building.inventory.push(resource);
+            }
+          }
+        }
+
+        updateSmelter(building) {
+          // Fundición con dos inventarios separados
+          const hasMaterial = building.materialInventory && building.materialInventory.length > 0;
+          const hasFuel = building.fuelInventory && building.fuelInventory.length > 0;
+
+          // Activar si tiene material Y combustible
+          if (hasMaterial && hasFuel) {
+            building.isActive = true;
+          } else {
+            building.isActive = false;
+            return;
+          }
+
+          building.recipeProgress += 1 / 30;
+
+          if (building.recipeProgress >= 1) {
+            // Consumir combustible
+            const fuel = building.fuelInventory.shift();
+            this.gameState.resources.delete(fuel.id);
+
+            // Consumir material
+            const material = building.materialInventory.shift();
+            this.gameState.resources.delete(material.id);
+
+            // Producir placa
+            const resource = {
+              id: `res_${Date.now()}_${Math.random()}`,
+              type: material.type === ResourceType.IRON ? ResourceType.IRON_PLATE : ResourceType.COPPER_PLATE,
+              position: { x: building.position.x, y: building.position.y },
+              progress: 0,
+              onConveyor: false,
+            };
+            this.gameState.resources.set(resource.id, resource);
+            building.inventory.push(resource);
+
+            building.recipeProgress = 0;
+          }
+        }
+
+        transferSmelterProducts(smelter) {
+          // Transferir productos de la fundición SOLO a través de la cinta que apunta hacia afuera
+          const maxConveyorInventory = 8;
+          const maxStorageInventory = 250;
+          
+          // Si no hay productos, no hacer nada
+          if (smelter.inventory.length === 0) return;
+
+          // Definir direcciones y qué dirección de cinta apunta hacia afuera en cada posición
+          const adjacentCheckList = [
+            { pos: { x: smelter.position.x, y: smelter.position.y - 1 }, requiredDir: Direction.UP },    // Arriba: cinta debe apuntar UP
+            { pos: { x: smelter.position.x + 1, y: smelter.position.y }, requiredDir: Direction.RIGHT }, // Derecha: cinta debe apuntar RIGHT
+            { pos: { x: smelter.position.x, y: smelter.position.y + 1 }, requiredDir: Direction.DOWN },  // Abajo: cinta debe apuntar DOWN
+            { pos: { x: smelter.position.x - 1, y: smelter.position.y }, requiredDir: Direction.LEFT }   // Izquierda: cinta debe apuntar LEFT
+          ];
+
+          let transferred = 0;
+          const maxTransfers = 2; // Máximo de items a transferir por tick
+
+          for (const check of adjacentCheckList) {
+            if (smelter.inventory.length === 0 || transferred >= maxTransfers) break;
+
+            const adjacentBuilding = this.gridSystem.getBuildingAt(check.pos.x, check.pos.y);
+            
+            if (adjacentBuilding && adjacentBuilding.type === BuildingType.CONVEYOR) {
+              // Solo transferir si la cinta apunta hacia AFUERA
+              if (adjacentBuilding.direction === check.requiredDir) {
+                if (adjacentBuilding.inventory.length < maxConveyorInventory) {
+                  const product = smelter.inventory.shift();
+                  adjacentBuilding.inventory.push(product);
+                  product.position = { x: adjacentBuilding.position.x, y: adjacentBuilding.position.y };
+                  transferred++;
+                }
+              }
+            } else if (adjacentBuilding && adjacentBuilding.type === BuildingType.STORAGE) {
+              // Los almacenes no tienen dirección, así que siempre reciben
+              if (adjacentBuilding.inventory.length < maxStorageInventory) {
+                const product = smelter.inventory.shift();
+                adjacentBuilding.inventory.push(product);
+                product.position = { x: adjacentBuilding.position.x, y: adjacentBuilding.position.y };
+                transferred++;
+              }
+            }
+          }
+
+          if (transferred > 0) {
+            logger.debug(`✅ Fundición en (${smelter.position.x},${smelter.position.y}) transfirió ${transferred} productos`);
+          }
+        }
+
+        processConveyorBelt(conveyor) {
+          const direction = conveyor.direction !== undefined ? conveyor.direction : Direction.RIGHT;
+          const maxConveyorInventory = 8;
+          const maxStorageInventory = 250;
+          
+          let transferCount = 0;
+          let maxTransfersPerFrame = 4; // Límite de seguridad para evitar loops
+
+          // PASO 1: Recoger recursos de edificios adyacentes
+          if (conveyor.inventory.length < maxConveyorInventory) {
+            const adjacentPositions = [
+              { x: conveyor.position.x, y: conveyor.position.y - 1 }, // UP
+              { x: conveyor.position.x + 1, y: conveyor.position.y }, // RIGHT
+              { x: conveyor.position.x, y: conveyor.position.y + 1 }, // DOWN
+              { x: conveyor.position.x - 1, y: conveyor.position.y }, // LEFT
+            ];
+
+            for (const pos of adjacentPositions) {
+              if (conveyor.inventory.length >= maxConveyorInventory) break;
+              
+              const adjacentBuilding = this.gridSystem.getBuildingAt(pos.x, pos.y);
+              // Solo recoger de mineros. La fundición transfiere a través de transferSmelterProducts()
+              if (adjacentBuilding && adjacentBuilding.type === BuildingType.MINER && adjacentBuilding.inventory.length > 0) {
+                const resource = adjacentBuilding.inventory.shift();
+                conveyor.inventory.push(resource);
+              }
+            }
+          }
+
+          // PASO 2: Transferir recursos de esta cinta (hasta 1 por tick para evitar loops)
+          let transferred = 0;
+          while (conveyor.inventory.length > 0 && transferred < 1 && transferCount < maxTransfersPerFrame) {
+            transferCount++;
+            let nextPos = { ...conveyor.position };
+            switch (direction) {
+              case Direction.UP:
+                nextPos.y--;
+                break;
+              case Direction.DOWN:
+                nextPos.y++;
+                break;
+              case Direction.LEFT:
+                nextPos.x--;
+                break;
+              case Direction.RIGHT:
+                nextPos.x++;
+                break;
+            }
+
+            const nextBuilding = this.gridSystem.getBuildingAt(nextPos.x, nextPos.y);
+
+            if (nextBuilding && nextBuilding.type !== BuildingType.CONVEYOR) {
+              // Transferir a almacén, fundición, etc
+              let canAdd = true;
+              
+              if (nextBuilding.type === BuildingType.SMELTER) {
+                // Para fundiciones: verificar capacidad SEPARADA según el tipo de recurso
+                const maxFuelCapacity = 10;
+                const maxMaterialCapacity = 10;
+                const resource = conveyor.inventory[0]; // Peek
+                
+                if (resource.type === ResourceType.COAL) {
+                  if (nextBuilding.fuelInventory.length >= maxFuelCapacity) {
+                    canAdd = false;
+                  }
+                } else if (resource.type === ResourceType.IRON || resource.type === ResourceType.COPPER) {
+                  if (nextBuilding.materialInventory.length >= maxMaterialCapacity) {
+                    canAdd = false;
+                  }
+                }
+              } else if (nextBuilding.type === BuildingType.STORAGE) {
+                // Para almacenes: verificar capacidad
+                if (nextBuilding.inventory.length >= maxStorageInventory) {
+                  canAdd = false;
+                }
+              }
+              
+              if (canAdd) {
+                const resource = conveyor.inventory.shift();
+                
+                if (nextBuilding.type === BuildingType.SMELTER) {
+                  // Para fundiciones: separar combustible y material
+                  if (resource.type === ResourceType.COAL) {
+                    nextBuilding.fuelInventory.push(resource);
+                  } else if (resource.type === ResourceType.IRON || resource.type === ResourceType.COPPER) {
+                    nextBuilding.materialInventory.push(resource);
+                  } else {
+                    // Si no es ni combustible ni material, guardar en inventario principal
+                    nextBuilding.inventory.push(resource);
+                  }
+                } else {
+                  // Para otros edificios (almacenes)
+                  nextBuilding.inventory.push(resource);
+                }
+                
+                resource.position = { x: nextBuilding.position.x, y: nextBuilding.position.y };
+                transferred++;
+              } else {
+                break; // Destino lleno
+              }
+            } else if (nextBuilding && nextBuilding.type === BuildingType.CONVEYOR) {
+              // Transferir a la siguiente cinta si tiene espacio
+              if (nextBuilding.inventory.length < maxConveyorInventory) {
+                const resource = conveyor.inventory.shift();
+                nextBuilding.inventory.push(resource);
+                resource.position = { x: nextPos.x, y: nextPos.y };
+                transferred++;
+              } else {
+                break; // No hay espacio en siguiente cinta
+              }
+            } else {
+              break; // No hay edificio adelante
+            }
+          }
+        }
+
+        collectAssemblerInputs(assembler) {
+          // Recolecta recursos de cintas adyacentes que apunten HACIA el ensamblador
+          if (!assembler.inputInventory) {
+            assembler.inputInventory = [];
+          }
+          
+          const maxInputCapacity = 20;
+          if (assembler.inputInventory.length >= maxInputCapacity) return;
+
+          // Mapeo de posiciones adyacentes a las direcciones que debería tener la cinta para apuntar hacia el ensamblador
+          const adjacentChecks = [
+            { pos: { x: assembler.position.x, y: assembler.position.y - 1 }, requiredDir: Direction.DOWN },  // Arriba → cinta apunta DOWN
+            { pos: { x: assembler.position.x + 1, y: assembler.position.y }, requiredDir: Direction.LEFT },  // Derecha → cinta apunta LEFT
+            { pos: { x: assembler.position.x, y: assembler.position.y + 1 }, requiredDir: Direction.UP },    // Abajo → cinta apunta UP
+            { pos: { x: assembler.position.x - 1, y: assembler.position.y }, requiredDir: Direction.RIGHT }, // Izquierda → cinta apunta RIGHT
+          ];
+
+          logger.debug(`📍 Recolectando inputs para ensamblador en (${assembler.position.x},${assembler.position.y})`);
+
+          for (const check of adjacentChecks) {
+            if (assembler.inputInventory.length >= maxInputCapacity) break;
+
+            const adjacentBuilding = this.gridSystem.getBuildingAt(check.pos.x, check.pos.y);
+            
+            // Solo recolectar de cintas que apuntan HACIA el ensamblador
+            if (adjacentBuilding && adjacentBuilding.type === BuildingType.CONVEYOR && 
+                adjacentBuilding.direction === check.requiredDir && 
+                adjacentBuilding.inventory.length > 0) {
+              const resource = adjacentBuilding.inventory.shift();
+              assembler.inputInventory.push(resource);
+              resource.position = { x: assembler.position.x, y: assembler.position.y };
+              logger.debug(`✅ Ensamblador en (${assembler.position.x},${assembler.position.y}) recolectó ${resource.type}, total entrada: ${assembler.inputInventory.length}`);
+            }
+          }
+        }
+
+        processAssembler(assembler) {
+          if (!assembler.selectedRecipe) {
+            assembler.isActive = false;
+            logger.debug(`⚠️ Ensamblador en (${assembler.position.x},${assembler.position.y}): Sin receta seleccionada`);
+            return;
+          }
+
+          // Asegurar que existan los inventarios
+          if (!assembler.inputInventory) {
+            assembler.inputInventory = [];
+          }
+          if (!assembler.outputInventory) {
+            assembler.outputInventory = [];
+          }
+
+          const recipes = {
+            cable: { input: ResourceType.COPPER_PLATE, inputCount: 2, output: ResourceType.CABLE, time: 10 },
+            coil: { input: ResourceType.CABLE, inputCount: 10, output: ResourceType.COIL, time: 15 },
+            construction_parts: { input: ResourceType.IRON_PLATE, inputCount: 1, output: ResourceType.CONSTRUCTION_PARTS, time: 20 }
+          };
+
+          const recipe = recipes[assembler.selectedRecipe];
+          if (!recipe) {
+            logger.debug(`⚠️ Ensamblador en (${assembler.position.x},${assembler.position.y}): Receta desconocida: ${assembler.selectedRecipe}`);
+            return;
+          }
+
+          // Contar cuántos materiales requeridos hay en inputInventory
+          const inputCount = assembler.inputInventory.filter(r => r.type === recipe.input).length;
+          logger.debug(`📋 Ensamblador en (${assembler.position.x},${assembler.position.y}): receta=${assembler.selectedRecipe}, necesita=${recipe.inputCount}, tiene=${inputCount}, progress=${assembler.recipeProgress?.toFixed(2) || 0}`);
+          
+          if (inputCount < recipe.inputCount) {
+            assembler.isActive = false;
+            return;
+          }
+
+          // Tiene suficientes materiales para la receta
+          assembler.isActive = true;
+          assembler.recipeProgress += 1 / recipe.time;
+          logger.debug(`✅ Ensamblador en (${assembler.position.x},${assembler.position.y}) activo, progreso: ${(assembler.recipeProgress * 100).toFixed(1)}%`);
+
+          if (assembler.recipeProgress >= 1) {
+            // Consumir entradas requeridas del inputInventory
+            for (let i = 0; i < recipe.inputCount; i++) {
+              const inputIndex = assembler.inputInventory.findIndex(r => r.type === recipe.input);
+              if (inputIndex !== -1) {
+                const input = assembler.inputInventory.splice(inputIndex, 1)[0];
+                this.gameState.resources.delete(input.id);
+              }
+            }
+
+            // Producir salida en outputInventory
+            const output = {
+              id: `res_${Date.now()}_${Math.random()}`,
+              type: recipe.output,
+              position: { x: assembler.position.x, y: assembler.position.y },
+              progress: 0,
+              onConveyor: false,
+            };
+            this.gameState.resources.set(output.id, output);
+            assembler.outputInventory.push(output);
+            logger.debug(`✅ Ensamblador en (${assembler.position.x},${assembler.position.y}) produjo ${recipe.output}`);
+
+            assembler.recipeProgress = 0;
+          }
+        }
+
+        transferAssemblerProducts(assembler) {
+          if (!assembler.selectedRecipe || !assembler.outputInventory || assembler.outputInventory.length === 0) return;
+
+          const maxConveyorInventory = 8;
+          const maxStorageInventory = 250;
+
+          // Mapeo de posiciones a las direcciones que debería tener la cinta para SALIR desde el ensamblador
+          const adjacentCheckList = [
+            { pos: { x: assembler.position.x, y: assembler.position.y - 1 }, requiredDir: Direction.UP },    // Arriba → cinta apunta UP
+            { pos: { x: assembler.position.x + 1, y: assembler.position.y }, requiredDir: Direction.RIGHT },  // Derecha → cinta apunta RIGHT
+            { pos: { x: assembler.position.x, y: assembler.position.y + 1 }, requiredDir: Direction.DOWN },   // Abajo → cinta apunta DOWN
+            { pos: { x: assembler.position.x - 1, y: assembler.position.y }, requiredDir: Direction.LEFT }    // Izquierda → cinta apunta LEFT
+          ];
+
+          let transferred = 0;
+          const maxTransfers = 2;
+
+          for (const check of adjacentCheckList) {
+            if (assembler.outputInventory.length === 0 || transferred >= maxTransfers) break;
+
+            const adjacentBuilding = this.gridSystem.getBuildingAt(check.pos.x, check.pos.y);
+
+            if (adjacentBuilding && adjacentBuilding.type === BuildingType.CONVEYOR) {
+              if (adjacentBuilding.direction === check.requiredDir) {
+                if (adjacentBuilding.inventory.length < maxConveyorInventory) {
+                  const product = assembler.outputInventory.shift();
+                  adjacentBuilding.inventory.push(product);
+                  product.position = { x: adjacentBuilding.position.x, y: adjacentBuilding.position.y };
+                  transferred++;
+                }
+              }
+            } else if (adjacentBuilding && adjacentBuilding.type === BuildingType.STORAGE) {
+              if (adjacentBuilding.inventory.length < maxStorageInventory) {
+                const product = assembler.outputInventory.shift();
+                adjacentBuilding.inventory.push(product);
+                product.position = { x: adjacentBuilding.position.x, y: adjacentBuilding.position.y };
+                transferred++;
+              }
+            }
+          }
+        }
+
+        transferStorageProducts(storage) {
+          // Transferir productos del almacén a cintas adyacentes que apunten DESDE el almacén
+          if (!storage.inventory || storage.inventory.length === 0) return;
+
+          const maxConveyorInventory = 8;
+          
+          // Mapeo de posiciones a las direcciones que debería tener la cinta para SALIR desde el almacén
+          const adjacentCheckList = [
+            { pos: { x: storage.position.x, y: storage.position.y - 1 }, requiredDir: Direction.UP },    // Arriba → cinta apunta UP
+            { pos: { x: storage.position.x + 1, y: storage.position.y }, requiredDir: Direction.RIGHT }, // Derecha → cinta apunta RIGHT
+            { pos: { x: storage.position.x, y: storage.position.y + 1 }, requiredDir: Direction.DOWN },  // Abajo → cinta apunta DOWN
+            { pos: { x: storage.position.x - 1, y: storage.position.y }, requiredDir: Direction.LEFT }   // Izquierda → cinta apunta LEFT
+          ];
+
+          let transferred = 0;
+          const maxTransfers = 1; // Máximo de items a transferir por tick desde almacén
+
+          for (const check of adjacentCheckList) {
+            if (storage.inventory.length === 0 || transferred >= maxTransfers) break;
+
+            const adjacentBuilding = this.gridSystem.getBuildingAt(check.pos.x, check.pos.y);
+
+            // Solo transferir a cintas que apunten hacia AFUERA desde el almacén
+            if (adjacentBuilding && adjacentBuilding.type === BuildingType.CONVEYOR) {
+              if (adjacentBuilding.direction === check.requiredDir) {
+                if (adjacentBuilding.inventory.length < maxConveyorInventory) {
+                  const product = storage.inventory.shift();
+                  adjacentBuilding.inventory.push(product);
+                  product.position = { x: adjacentBuilding.position.x, y: adjacentBuilding.position.y };
+                  transferred++;
+                  logger.debug(`✅ Almacén en (${storage.position.x},${storage.position.y}) transfirió ${product.type} a cinta en dirección ${adjacentBuilding.direction}`);
+                }
+              }
+            }
+          }
+        }
+
+        render() {
+          for (const resource of this.gameState.resources.values()) {
+            if (resource.targetPosition) {
+              const speed = 0.2;
+              resource.progress = Math.min(1, resource.progress + speed);
+
+              if (resource.progress >= 1) {
+                resource.position = resource.targetPosition;
+                resource.targetPosition = undefined;
+                resource.progress = 0;
+              }
+            }
+          }
+
+          this.renderer.render(this.gameState, this.camera, this.gridSystem);
+        }
+
+        gameLoopStep(currentTime) {
+          if (this.lastFrameTime === 0) {
+            this.lastFrameTime = currentTime;
+          }
+
+          const deltaTime = currentTime - this.lastFrameTime;
+          this.lastFrameTime = currentTime;
+
+          this.update(deltaTime);
+          this.render();
+
+          if (this.running) {
+            this.animationFrameId = requestAnimationFrame((time) => this.gameLoopStep(time));
+          }
+        }
+
+        start() {
+          if (this.running) return;
+          this.running = true;
+          this.animationFrameId = requestAnimationFrame((time) => this.gameLoopStep(time));
+          console.log("🎮 Juego iniciado");
+        }
+
+        stop() {
+          if (!this.running) return;
+          this.running = false;
+          if (this.animationFrameId !== null) {
+            cancelAnimationFrame(this.animationFrameId);
+          }
+        }
+
+        saveGame() {
+          const buildingsArray = Array.from(this.gameState.buildings.values()).map((b) => ({
+            id: b.id,
+            type: b.type,
+            position: b.position,
+            direction: b.direction,
+            health: b.health,
+          }));
+
+          const saveData = {
+            buildings: buildingsArray,
+            resources: Array.from(this.gameState.resources.values()),
+            playerInventory: this.gameState.playerInventory,
+            gameTime: this.gameState.gameTime,
+          };
+
+          localStorage.setItem("factorio-save", JSON.stringify(saveData));
+        }
+
+        loadGame() {
+          const saveData = localStorage.getItem("factorio-save");
+          if (!saveData) return;
+
+          try {
+            const data = JSON.parse(saveData);
+
+            data.buildings?.forEach((buildingData) => {
+              this.placeBuilding(buildingData.type, buildingData.position.x, buildingData.position.y);
+            });
+
+            this.gameState.playerInventory = data.playerInventory;
+
+            console.log("✓ Partida cargada");
+          } catch (error) {
+            console.error("Error al cargar partida:", error);
+          }
+        }
+      }
+
+      // ============================================================================
+      // INICIALIZAR JUEGO
+      // ============================================================================
+
+      document.addEventListener("DOMContentLoaded", () => {
+        console.log("🏭 Iniciando Factorio Web...");
+
+        const gameLoop = new GameLoop("gameCanvas");
+        gameLoop.start();
+
+        const canvas = document.querySelector("canvas");
+        if (canvas) {
+          canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+        }
+
+        console.log("%c CONTROLES DEL JUEGO ", "background: #333; color: #0f0; font-weight: bold; padding: 5px;");
+        console.log(
+          "%c M = Minero | C = Cinta | A = Almacén | F = Fundición | E = Ensamblador",
+          "background: #222; color: #0f0; padding: 5px;"
+        );
+        console.log("%c Espacio = Pausa | S = Guardar | Rueda = Zoom", "background: #222; color: #0f0; padding: 5px;");
+        console.log("%c Click izq = Colocar | Click der = Cancelar", "background: #222; color: #0f0; padding: 5px;");
+      });
+    </script>
+  </body>
+</html>

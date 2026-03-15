@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Factorio Web - Juego de Automatización</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: #1a1a1a;
+        color: #fff;
+        overflow: hidden;
+      }
+
+      #game-container {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+      }
+
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        background: #2a2a2a;
+        cursor: crosshair;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: #1a1a1a;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: #444;
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: #666;
+      }
+
+      ::selection {
+        background: rgba(100, 200, 255, 0.5);
+        color: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game-container">
+      <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+      // ============================================================================
+      // TIPOS Y ENUMS
+      // ============================================================================
+
+      const ResourceType = {
+        IRON: "iron",
+        COPPER: "copper",
+        COAL: "coal",
+        IRON_PLATE: "iron_plate",
+        COPPER_PLATE: "copper_plate",
+      };
+
+      const BuildingType = {
+        MINER: "miner",
+        CONVEYOR: "conveyor",
+        STORAGE: "storage",
+        SMELTER: "smelter",
+      };
+
+      const Direction = {
+        UP: 0,
+        RIGHT: 1,
+        DOWN: 2,
+        LEFT: 3,
+      };
+
+      // ============================================================================
+      // GENERADOR DE SPRITES
+      // ============================================================================
+
+      class SpriteGenerator {
+        static generateResourceSprite(resourceType, size = 16) {
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext("2d");
+
+          const colors = {
+            iron: "#A0A0A0",
+            copper: "#D4621D",
+            coal: "#2A2A2A",
+            iron_plate: "#C0C0C0",
+            copper_plate: "#E8961F",
+          };
+
+          ctx.fillStyle = colors[resourceType] || "#888";
+          ctx.fillRect(2, 2, size - 4, size - 4);
+          ctx.strokeStyle = "#000";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(2, 2, size - 4, size - 4);
+
+          return canvas;
+        }
+
+        static generateBuildingSprite(buildingType, size = 32) {
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext("2d");
+
+          ctx.fillStyle = "#f0f0f0";
+          ctx.fillRect(0, 0, size, size);
+          ctx.strokeStyle = "#333";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(0, 0, size, size);
+
+          ctx.fillStyle = "#333";
+          ctx.font = `${size * 0.5}px Arial`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+
+          const icons = {
+            miner: "⛏",
+            conveyor: "→",
+            storage: "📦",
+            smelter: "🔥",
+          };
+
+          ctx.fillText(icons[buildingType] || "?", size / 2, size / 2);
+          return canvas;
+        }
+
+        static generateTerrainTile(tileSize, resourceType) {
+          const canvas = document.createElement("canvas");
+          canvas.width = tileSize;
+          canvas.height = tileSize;
+          const ctx = canvas.getContext("2d");
+
+          ctx.fillStyle = "#1a5c1a";
+          ctx.fillRect(0, 0, tileSize, tileSize);
+
+          if (resourceType) {
+            const colors = {
+              iron: "#A0A0A0",
+              copper: "#D4621D",
+              coal: "#2A2A2A",
+            };
+
+            ctx.fillStyle = colors[resourceType] || "#888";
+            ctx.beginPath();
+            ctx.arc(tileSize / 2, tileSize / 2, tileSize * 0.3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          return canvas;
+        }
+      }
+
+      class SpriteCache {
+        constructor() {
+          this.cache = new Map();
+        }
+
+        getResourceSprite(type) {
+          const key = `resource_${type}`;
+          if (!this.cache.has(key)) {
+            this.cache.set(key, SpriteGenerator.generateResourceSprite(type));
+          }
+          return this.cache.get(key);
+        }
+
+        getBuildingSprite(type) {
+          const key = `building_${type}`;
+          if (!this.cache.has(key)) {
+            this.cache.set(key, SpriteGenerator.generateBuildingSprite(type));
+          }
+          return this.cache.get(key);
+        }
+
+        getTerrainSprite(type) {
+          const key = `terrain_${type || "empty"}`;
+          if (!this.cache.has(key)) {
+            this.cache.set(key, SpriteGenerator.generateTerrainTile(32, type));
+          }
+          return this.cache.get(key);
+        }
+
+        clear() {
+          this.cache.clear();
+        }
+      }
+
+      // ============================================================================
+      // SISTEMA DE GRID Y CÁMARA
+      // ============================================================================
+
+      class GridSystem {
+        constructor(width, height) {
+          this.width = width;
+          this.height = height;
+          this.grid = [];
+          this.tileSize = 32;
+          this.initializeGrid();
+        }
+
+        initializeGrid() {
+          for (let y = 0; y < this.height; y++) {
+            this.grid[y] = [];
+            for (let x = 0; x < this.width; x++) {
+              this.grid[y][x] = {
+                x,
+                y,
+                terrain: "grass",
+              };
+
+              if (Math.random() < 0.08) {
+                const resourceTypes = [ResourceType.IRON, ResourceType.COPPER, ResourceType.COAL];
+                const randomType = resourceTypes[Math.floor(Math.random() * resourceTypes.length)];
+                this.grid[y][x].resource = {
+                  type: randomType,
+                  quantity: 500,
+                };
+              }
+            }
+          }
+        }
+
+        getTile(x, y) {
+          if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
+            return this.grid[y][x];
+          }
+          return null;
+        }
+
+        getGrid() {
+          return this.grid;
+        }
+
+        canPlaceBuilding(x, y) {
+          const tile = this.getTile(x, y);
+          if (!tile) return false;
+          return !tile.building;
+        }
+
+        placeBuilding(x, y, building) {
+          const tile = this.getTile(x, y);
+          if (!tile || !this.canPlaceBuilding(x, y)) {
+            return false;
+          }
+          tile.building = building;
+          return true;
+        }
+
+        removeBuilding(x, y) {
+          const tile = this.getTile(x, y);
+          if (tile && tile.building) {
+            const building = tile.building;
+            tile.building = undefined;
+            return building;
+          }
+          return null;
+        }
+
+        getBuildingAt(x, y) {
+          const tile = this.getTile(x, y);
+          return tile?.building;
+        }
+
+        getResourceAt(x, y) {
+          const tile = this.getTile(x, y);
+          return tile?.resource;
+        }
+
+        extractResource(x, y, amount) {
+          const resource = this.getResourceAt(x, y);
+          if (!resource) return 0;
+
+          const extracted = Math.min(amount, resource.quantity);
+          resource.quantity -= extracted;
+
+          if (resource.quantity <= 0) {
+            const tile = this.getTile(x, y);
+            if (tile) {
+              tile.resource = undefined;
+            }
+          }
+
+          return extracted;
+        }
+
+        getTileSize() {
+          return this.tileSize;
+        }
+
+        setTileSize(size) {
+          this.tileSize = size;
+        }
+      }
+
+      class Camera {
+        constructor(x = 0, y = 0, width = 800, height = 600) {
+          this.position = { x, y };
+          this.zoom = 1;
+          this.minZoom = 0.5;
+          this.maxZoom = 3;
+          this.width = width;
+          this.height = height;
+        }
+
+        panBy(dx, dy) {
+          this.position.x += dx;
+          this.position.y += dy;
+        }
+
+        zoomAt(factor, cursorX, cursorY) {
+          const oldZoom = this.zoom;
+          this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom * factor));
+
+          const zoomChange = (this.zoom - oldZoom) / oldZoom;
+          this.position.x -= (cursorX / oldZoom) * zoomChange;
+          this.position.y -= (cursorY / oldZoom) * zoomChange;
+        }
+
+        setSize(width, height) {
+          this.width = width;
+          this.height = height;
+        }
+
+        worldToScreen(worldX, worldY) {
+          return {
+            x: (worldX - this.position.x) * this.zoom,
+            y: (worldY - this.position.y) * this.zoom,
+          };
+        }
+
+        screenToWorld(screenX, screenY) {
+          return {
+            x: screenX / this.zoom + this.position.x,
+            y: screenY / this.zoom + this.position.y,
+          };
+        }
+
+        isVisible(x, y, size) {
+          const screenPos = this.worldToScreen(x, y);
+          const screenSize = size * this.zoom;
+          return (
+            screenPos.x + screenSize > 0 &&
+            screenPos.x < this.width &&
+            screenPos.y + screenSize > 0 &&
+            screenPos.y < this.height
+          );
+        }
+      }
+
+      // ============================================================================
+      // SISTEMA DE RENDERIZADO
+      // ============================================================================
+
+      class Renderer {
+        constructor(canvasId, spriteCache) {
+          const canvas = document.getElementById(canvasId);
+          if (!canvas) {
+            throw new Error(`Canvas con id ${canvasId} no encontrado`);
+          }
+          this.canvas = canvas;
+          this.ctx = canvas.getContext("2d");
+          this.spriteCache = spriteCache;
+          this.resizeCanvas();
+          window.addEventListener("resize", () => this.resizeCanvas());
+        }
+
+        resizeCanvas() {
+          const rect = this.canvas.getBoundingClientRect();
+          this.canvas.width = rect.width;
+          this.canvas.height = rect.height;
+        }
+
+        render(gameState, camera, grid) {
+          this.ctx.fillStyle = "#1a1a1a";
+          this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+          this.ctx.save();
+          this.ctx.scale(camera.zoom, camera.zoom);
+          this.ctx.translate(-camera.position.x, -camera.position.y);
+
+          this.renderGrid(grid, camera);
+          this.renderResourceNodes(grid, camera);
+          this.renderBuildings(gameState, camera);
+          this.renderResources(gameState);
+
+          if (gameState.selectedBuilding) {
+            this.renderBuildingSelection(gameState.selectedBuilding);
+          }
+
+          this.ctx.restore();
+
+          this.renderUI(gameState, camera);
+        }
+
+        renderGrid(grid, camera) {
+          const tileSize = grid.getTileSize();
+          const gridTiles = grid.getGrid();
+
+          for (let y = 0; y < gridTiles.length; y++) {
+            for (let x = 0; x < gridTiles[y].length; x++) {
+              if (camera.isVisible(x * tileSize, y * tileSize, tileSize)) {
+                this.ctx.fillStyle = "#1a5c1a";
+                this.ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+
+                this.ctx.strokeStyle = "#333";
+                this.ctx.lineWidth = 0.5 / camera.zoom;
+                this.ctx.strokeRect(x * tileSize, y * tileSize, tileSize, tileSize);
+              }
+            }
+          }
+        }
+
+        renderResourceNodes(grid, camera) {
+          const tileSize = grid.getTileSize();
+          const gridTiles = grid.getGrid();
+
+          for (let y = 0; y < gridTiles.length; y++) {
+            for (let x = 0; x < gridTiles[y].length; x++) {
+              const tile = gridTiles[y][x];
+              if (tile.resource && camera.isVisible(x * tileSize, y * tileSize, tileSize)) {
+                const sprite = this.spriteCache.getTerrainSprite(tile.resource.type);
+                this.ctx.drawImage(sprite, x * tileSize + 4, y * tileSize + 4, tileSize - 8, tileSize - 8);
+
+                this.ctx.fillStyle = "#fff";
+                this.ctx.font = `${Math.max(8 / camera.zoom, 6)}px Arial`;
+                this.ctx.textAlign = "right";
+                this.ctx.fillText(tile.resource.quantity.toString(), x * tileSize + tileSize - 2, y * tileSize + tileSize - 2);
+              }
+            }
+          }
+        }
+
+        renderBuildings(gameState, camera) {
+          const tileSize = 32;
+
+          for (const building of gameState.buildings.values()) {
+            const x = building.position.x * tileSize;
+            const y = building.position.y * tileSize;
+
+            if (camera.isVisible(x, y, tileSize)) {
+              const sprite = this.spriteCache.getBuildingSprite(building.type);
+              this.ctx.drawImage(sprite, x, y, tileSize, tileSize);
+
+              if (building.isActive) {
+                this.ctx.fillStyle = "rgba(0, 255, 0, 0.2)";
+                this.ctx.fillRect(x, y, tileSize, tileSize);
+
+                const animTime = (gameState.gameTime % 1000) / 1000;
+                this.ctx.strokeStyle = `rgba(0, 255, 0, ${0.5 + Math.sin(animTime * Math.PI * 2) * 0.3})`;
+                this.ctx.lineWidth = 2 / camera.zoom;
+                this.ctx.strokeRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+              }
+
+              if (building.recipeProgress > 0 && building.recipeProgress < 1) {
+                this.ctx.fillStyle = "rgba(100, 200, 255, 0.3)";
+                this.ctx.fillRect(x, y - 8, tileSize * building.recipeProgress, 4);
+                this.ctx.strokeStyle = "rgba(100, 200, 255, 0.6)";
+                this.ctx.lineWidth = 1 / camera.zoom;
+                this.ctx.strokeRect(x, y - 8, tileSize, 4);
+              }
+
+              if (building.type === BuildingType.STORAGE && building.inventory.length > 0) {
+                this.ctx.fillStyle = "#ffff00";
+                this.ctx.font = `${Math.max(10 / camera.zoom, 7)}px Arial`;
+                this.ctx.textAlign = "center";
+                this.ctx.fillText(building.inventory.length.toString(), x + tileSize / 2, y + tileSize / 2);
+              }
+            }
+          }
+        }
+
+        renderResources(gameState) {
+          const tileSize = 32;
+
+          for (const resource of gameState.resources.values()) {
+            const screenPos = {
+              x: resource.position.x * tileSize + 8,
+              y: resource.position.y * tileSize + 8,
+            };
+
+            if (resource.targetPosition) {
+              const targetScreen = {
+                x: resource.targetPosition.x * tileSize + 8,
+                y: resource.targetPosition.y * tileSize + 8,
+              };
+              screenPos.x = screenPos.x + (targetScreen.x - screenPos.x) * resource.progress;
+              screenPos.y = screenPos.y + (targetScreen.y - screenPos.y) * resource.progress;
+            }
+
+            const sprite = this.spriteCache.getResourceSprite(resource.type);
+            this.ctx.drawImage(sprite, screenPos.x - 8, screenPos.y - 8, 16, 16);
+          }
+        }
+
+        renderBuildingSelection(building) {
+          const tileSize = 32;
+          const x = building.position.x * tileSize;
+          const y = building.position.y * tileSize;
+
+          this.ctx.strokeStyle = "#00ff00";
+          this.ctx.lineWidth = 3;
+          this.ctx.strokeRect(x, y, tileSize, tileSize);
+        }
+
+        renderUI(gameState, camera) {
+          this.ctx.restore();
+          this.renderResourcePanel(gameState);
+          this.renderInfoPanel(gameState);
+          this.renderBuildingPanel();
+        }
+
+        renderResourcePanel(gameState) {
+          const panelHeight = 80;
+          const panelY = this.canvas.height - panelHeight;
+
+          this.ctx.fillStyle = "rgba(30, 30, 30, 0.95)";
+          this.ctx.fillRect(0, panelY, this.canvas.width, panelHeight);
+
+          this.ctx.strokeStyle = "#666";
+          this.ctx.lineWidth = 2;
+          this.ctx.strokeRect(0, panelY, this.canvas.width, panelHeight);
+
+          this.ctx.fillStyle = "#fff";
+          this.ctx.font = "bold 16px Arial";
+          this.ctx.textAlign = "left";
+          this.ctx.fillText("Recursos", 10, panelY + 25);
+
+          const resourceEntries = Object.entries(gameState.playerInventory);
+          let xOffset = 150;
+
+          resourceEntries.forEach(([resourceType, amount]) => {
+            this.ctx.fillStyle = "#ccc";
+            this.ctx.font = "12px Arial";
+            this.ctx.fillText(`${resourceType}: ${amount}`, xOffset, panelY + 25);
+            xOffset += 150;
+          });
+
+          this.ctx.fillStyle = "#888";
+          this.ctx.font = "11px Arial";
+          this.ctx.textAlign = "right";
+          this.ctx.fillText(
+            "M:Minero | C:Cinta | A:Almacén | F:Fundición | Espacio:Pausa | S:Guardar",
+            this.canvas.width - 10,
+            panelY + 25
+          );
+        }
+
+        renderInfoPanel(gameState) {
+          if (!gameState.selectedBuilding) return;
+
+          const panelWidth = 250;
+          const panelHeight = 200;
+
+          this.ctx.fillStyle = "rgba(30, 30, 30, 0.95)";
+          this.ctx.fillRect(this.canvas.width - panelWidth, 10, panelWidth, panelHeight);
+
+          this.ctx.strokeStyle = "#666";
+          this.ctx.lineWidth = 2;
+          this.ctx.strokeRect(this.canvas.width - panelWidth, 10, panelWidth, panelHeight);
+
+          const building = gameState.selectedBuilding;
+          const x = this.canvas.width - panelWidth + 15;
+          let y = 30;
+
+          this.ctx.fillStyle = "#fff";
+          this.ctx.font = "bold 14px Arial";
+          this.ctx.textAlign = "left";
+          this.ctx.fillText(`${building.type.toUpperCase()}`, x, y);
+          y += 25;
+
+          this.ctx.fillStyle = "#ccc";
+          this.ctx.font = "12px Arial";
+          this.ctx.fillText(`Pos: ${building.position.x}, ${building.position.y}`, x, y);
+          y += 18;
+          this.ctx.fillText(`Salud: ${building.health}/${building.maxHealth}`, x, y);
+          y += 18;
+          this.ctx.fillText(`Inventario: ${building.inventory.length}`, x, y);
+          y += 18;
+          this.ctx.fillText(`Salida: ${building.outputInventory?.length || 0}`, x, y);
+          y += 18;
+          this.ctx.fillText(`Estado: ${building.isActive ? "Activo" : "Inactivo"}`, x, y);
+        }
+
+        renderBuildingPanel() {
+          const panelWidth = 200;
+          const panelHeight = 300;
+
+          this.ctx.fillStyle = "rgba(30, 30, 30, 0.95)";
+          this.ctx.fillRect(10, 10, panelWidth, panelHeight);
+
+          this.ctx.strokeStyle = "#666";
+          this.ctx.lineWidth = 2;
+          this.ctx.strokeRect(10, 10, panelWidth, panelHeight);
+
+          this.ctx.fillStyle = "#fff";
+          this.ctx.font = "bold 14px Arial";
+          this.ctx.textAlign = "left";
+          this.ctx.fillText("Edificios", 20, 35);
+
+          const buildings = [
+            { name: "Minero", key: "M" },
+            { name: "Cinta", key: "C" },
+            { name: "Almacén", key: "A" },
+            { name: "Fundición", key: "F" },
+          ];
+
+          this.ctx.fillStyle = "#aaa";
+          this.ctx.font = "11px Arial";
+          buildings.forEach((building, index) => {
+            this.ctx.fillText(`[${building.key}] ${building.name}`, 20, 60 + index * 25);
+          });
+        }
+      }
+
+      // ============================================================================
+      // BUCLE DEL JUEGO
+      // ============================================================================
+
+      class GameLoop {
+        constructor(canvasId) {
+          this.spriteCache = new SpriteCache();
+          this.gridSystem = new GridSystem(40, 40);
+          this.camera = new Camera(0, 0, 800, 600);
+
+          this.renderer = new Renderer(canvasId, this.spriteCache);
+
+          this.gameState = {
+            buildings: new Map(),
+            resources: new Map(),
+            playerInventory: {
+              iron: 0,
+              copper: 0,
+              coal: 0,
+              iron_plate: 0,
+              copper_plate: 0,
+            },
+            grid: this.gridSystem.getGrid(),
+            camera: this.camera.position,
+            gameTime: 0,
+            isPaused: false,
+          };
+
+          this.running = false;
+          this.animationFrameId = null;
+          this.lastFrameTime = 0;
+          this.deltaTime = 0;
+          this.tickCounter = 0;
+          this.tickRate = 10;
+          this.placementMode = null;
+
+          this.setupInputHandlers();
+          this.loadGame();
+        }
+
+        setupInputHandlers() {
+          const canvas = document.querySelector("canvas");
+          if (!canvas) return;
+
+          canvas.addEventListener("click", (e) => this.handleCanvasClick(e));
+          canvas.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            this.placementMode = null;
+          });
+
+          canvas.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            const factor = e.deltaY > 0 ? 0.8 : 1.2;
+            const rect = canvas.getBoundingClientRect();
+            const cursorX = e.clientX - rect.left;
+            const cursorY = e.clientY - rect.top;
+            this.camera.zoomAt(factor, cursorX, cursorY);
+          });
+
+          document.addEventListener("keydown", (e) => this.handleKeyDown(e));
+
+          let isDragging = false;
+          let lastX = 0;
+          let lastY = 0;
+
+          canvas.addEventListener("mousedown", (e) => {
+            if (e.button === 1 || e.button === 2) {
+              isDragging = true;
+              lastX = e.clientX;
+              lastY = e.clientY;
+            }
+          });
+
+          canvas.addEventListener("mousemove", (e) => {
+            if (isDragging) {
+              const dx = (e.clientX - lastX) / this.camera.zoom;
+              const dy = (e.clientY - lastY) / this.camera.zoom;
+              this.camera.panBy(-dx, -dy);
+              lastX = e.clientX;
+              lastY = e.clientY;
+            }
+          });
+
+          canvas.addEventListener("mouseup", () => {
+            isDragging = false;
+          });
+        }
+
+        handleCanvasClick(event) {
+          const canvas = event.target;
+          const rect = canvas.getBoundingClientRect();
+          const screenX = event.clientX - rect.left;
+          const screenY = event.clientY - rect.top;
+          const worldPos = this.camera.screenToWorld(screenX, screenY);
+
+          const gridX = Math.floor(worldPos.x / 32);
+          const gridY = Math.floor(worldPos.y / 32);
+
+          if (this.placementMode) {
+            if (this.gridSystem.canPlaceBuilding(gridX, gridY)) {
+              this.placeBuilding(this.placementMode, gridX, gridY);
+            }
+            return;
+          }
+
+          const building = this.gridSystem.getBuildingAt(gridX, gridY);
+          if (building) {
+            this.gameState.selectedBuilding = building;
+          } else {
+            this.gameState.selectedBuilding = undefined;
+          }
+        }
+
+        handleKeyDown(event) {
+          const key = event.key.toUpperCase();
+
+          if (key === "M") {
+            this.placementMode = BuildingType.MINER;
+          } else if (key === "C") {
+            this.placementMode = BuildingType.CONVEYOR;
+          } else if (key === "A") {
+            this.placementMode = BuildingType.STORAGE;
+          } else if (key === "F") {
+            this.placementMode = BuildingType.SMELTER;
+          } else if (key === " ") {
+            this.gameState.isPaused = !this.gameState.isPaused;
+          } else if (key === "S") {
+            this.saveGame();
+            console.log("Partida guardada");
+          }
+        }
+
+        placeBuilding(type, gridX, gridY) {
+          const building = {
+            id: `${type}_${Date.now()}`,
+            type,
+            position: { x: gridX, y: gridY },
+            direction: Direction.RIGHT,
+            inputs: [],
+            outputs: [],
+            inventory: [],
+            outputInventory: [],
+            recipeProgress: 0,
+            isActive: true,
+            health: 100,
+            maxHealth: 100,
+          };
+
+          this.gridSystem.placeBuilding(gridX, gridY, building);
+          this.gameState.buildings.set(building.id, building);
+          this.gameState.selectedBuilding = building;
+          this.placementMode = null;
+        }
+
+        update(deltaTime) {
+          if (this.gameState.isPaused) return;
+
+          this.deltaTime = deltaTime;
+          this.tickCounter += deltaTime;
+
+          this.gameState.gameTime += deltaTime;
+
+          const tickDuration = 1000 / this.tickRate;
+          while (this.tickCounter >= tickDuration) {
+            this.updateTick();
+            this.tickCounter -= tickDuration;
+          }
+        }
+
+        updateTick() {
+          for (const building of this.gameState.buildings.values()) {
+            this.updateBuilding(building);
+          }
+
+          // Procesar movimiento de recursos en cintas
+          for (const building of this.gameState.buildings.values()) {
+            if (building.type === BuildingType.CONVEYOR) {
+              this.processConveyorBelt(building);
+            }
+          }
+        }
+
+        updateBuilding(building) {
+          switch (building.type) {
+            case BuildingType.MINER:
+              this.updateMiner(building);
+              break;
+            case BuildingType.SMELTER:
+              this.updateSmelter(building);
+              break;
+          }
+        }
+
+        updateMiner(building) {
+          if (!building.isActive) return;
+
+          const tile = this.gridSystem.getTile(building.position.x, building.position.y);
+          if (!tile || !tile.resource) return;
+
+          const extracted = this.gridSystem.extractResource(building.position.x, building.position.y, 2);
+
+          if (extracted > 0) {
+            for (let i = 0; i < extracted; i++) {
+              const resource = {
+                id: `res_${Date.now()}_${i}`,
+                type: tile.resource.type,
+                position: { x: building.position.x, y: building.position.y },
+                progress: 0,
+                onConveyor: false,
+              };
+              this.gameState.resources.set(resource.id, resource);
+              building.inventory.push(resource);
+            }
+          }
+        }
+
+        updateSmelter(building) {
+          if (!building.isActive || building.inventory.length === 0) return;
+
+          // Receta simple: hierro + carbón = placa de hierro
+          const hasIron = building.inventory.filter((r) => r.type === ResourceType.IRON).length > 0;
+          const hasCoal = building.inventory.filter((r) => r.type === ResourceType.COAL).length > 0;
+
+          if (!hasIron || !hasCoal) {
+            building.isActive = false;
+            return;
+          }
+
+          building.recipeProgress += 1 / 30; // 30 ticks para completar
+
+          if (building.recipeProgress >= 1) {
+            // Consumir inputs
+            let removedIron = false;
+            let removedCoal = false;
+
+            for (let i = building.inventory.length - 1; i >= 0; i--) {
+              if (!removedIron && building.inventory[i].type === ResourceType.IRON) {
+                this.gameState.resources.delete(building.inventory[i].id);
+                building.inventory.splice(i, 1);
+                removedIron = true;
+              }
+            }
+
+            for (let i = building.inventory.length - 1; i >= 0; i--) {
+              if (!removedCoal && building.inventory[i].type === ResourceType.COAL) {
+                this.gameState.resources.delete(building.inventory[i].id);
+                building.inventory.splice(i, 1);
+                removedCoal = true;
+              }
+            }
+
+            // Producir output
+            const resource = {
+              id: `res_${Date.now()}`,
+              type: ResourceType.IRON_PLATE,
+              position: { x: building.position.x, y: building.position.y },
+              progress: 0,
+              onConveyor: false,
+            };
+            this.gameState.resources.set(resource.id, resource);
+            building.inventory.push(resource);
+
+            building.recipeProgress = 0;
+            building.isActive = true;
+          }
+        }
+
+        processConveyorBelt(conveyor) {
+          const direction = conveyor.direction;
+
+          let nextPos = { ...conveyor.position };
+          switch (direction) {
+            case Direction.UP:
+              nextPos.y--;
+              break;
+            case Direction.DOWN:
+              nextPos.y++;
+              break;
+            case Direction.LEFT:
+              nextPos.x--;
+              break;
+            case Direction.RIGHT:
+              nextPos.x++;
+              break;
+          }
+
+          for (const resource of this.gameState.resources.values()) {
+            if (
+              resource.position.x === conveyor.position.x &&
+              resource.position.y === conveyor.position.y &&
+              !resource.targetPosition
+            ) {
+              resource.targetPosition = nextPos;
+              resource.onConveyor = true;
+            }
+          }
+        }
+
+        render() {
+          // Actualizar movimiento continuo de recursos
+          for (const resource of this.gameState.resources.values()) {
+            if (resource.targetPosition) {
+              const speed = 0.2; // velocidad por tick
+              resource.progress = Math.min(1, resource.progress + speed);
+
+              if (resource.progress >= 1) {
+                resource.position = resource.targetPosition;
+                resource.targetPosition = undefined;
+                resource.progress = 0;
+              }
+            }
+          }
+
+          this.renderer.render(this.gameState, this.camera, this.gridSystem);
+        }
+
+        gameLoopStep(currentTime) {
+          if (this.lastFrameTime === 0) {
+            this.lastFrameTime = currentTime;
+          }
+
+          const deltaTime = currentTime - this.lastFrameTime;
+          this.lastFrameTime = currentTime;
+
+          this.update(deltaTime);
+          this.render();
+
+          if (this.running) {
+            this.animationFrameId = requestAnimationFrame((time) => this.gameLoopStep(time));
+          }
+        }
+
+        start() {
+          if (this.running) return;
+          this.running = true;
+          this.animationFrameId = requestAnimationFrame((time) => this.gameLoopStep(time));
+          console.log("🎮 Juego iniciado");
+        }
+
+        stop() {
+          if (!this.running) return;
+          this.running = false;
+          if (this.animationFrameId !== null) {
+            cancelAnimationFrame(this.animationFrameId);
+          }
+        }
+
+        saveGame() {
+          const buildingsArray = Array.from(this.gameState.buildings.values()).map((b) => ({
+            id: b.id,
+            type: b.type,
+            position: b.position,
+            direction: b.direction,
+            health: b.health,
+          }));
+
+          const saveData = {
+            buildings: buildingsArray,
+            resources: Array.from(this.gameState.resources.values()),
+            playerInventory: this.gameState.playerInventory,
+            gameTime: this.gameState.gameTime,
+          };
+
+          localStorage.setItem("factorio-save", JSON.stringify(saveData));
+        }
+
+        loadGame() {
+          const saveData = localStorage.getItem("factorio-save");
+          if (!saveData) return;
+
+          try {
+            const data = JSON.parse(saveData);
+
+            data.buildings?.forEach((buildingData) => {
+              this.placeBuilding(buildingData.type, buildingData.position.x, buildingData.position.y);
+            });
+
+            this.gameState.playerInventory = data.playerInventory;
+
+            console.log("✓ Partida cargada");
+          } catch (error) {
+            console.error("Error al cargar partida:", error);
+          }
+        }
+      }
+
+      // ============================================================================
+      // INICIALIZAR JUEGO
+      // ============================================================================
+
+      document.addEventListener("DOMContentLoaded", () => {
+        console.log("🏭 Iniciando Factorio Web...");
+
+        const gameLoop = new GameLoop("gameCanvas");
+        gameLoop.start();
+
+        const canvas = document.querySelector("canvas");
+        if (canvas) {
+          canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+        }
+
+        console.log("%c CONTROLES DEL JUEGO ", "background: #333; color: #0f0; font-weight: bold; padding: 5px;");
+        console.log(
+          "%c M = Minero | C = Cinta | A = Almacén | F = Fundición",
+          "background: #222; color: #0f0; padding: 5px;"
+        );
+        console.log("%c Espacio = Pausa | S = Guardar | Rueda = Zoom", "background: #222; color: #0f0; padding: 5px;");
+        console.log("%c Click izq = Colocar | Click der = Cancelar", "background: #222; color: #0f0; padding: 5px;");
+      });
+    </script>
+  </body>
+</html>
