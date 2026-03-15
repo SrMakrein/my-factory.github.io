@@ -1136,7 +1136,7 @@
 
         renderSmelterPanel(building, x, y, width) {
           this.ctx.fillStyle = "#ccc";
-          this.ctx.font = "11px Arial";
+          this.ctx.font = "12px Arial";
           this.ctx.textAlign = "left";
           
           const fuelCount = building.fuelInventory ? building.fuelInventory.length : 0;
@@ -1144,32 +1144,35 @@
           
           // Combustible
           this.ctx.fillText("Combustible:", x, y);
+          y += 14;
           if (fuelCount > 0) {
             const fuelSprite = this.spriteCache.getResourceSprite(ResourceType.COAL);
-            this.ctx.drawImage(fuelSprite, x, y - 12, 14, 14);
+            this.ctx.drawImage(fuelSprite, x, y - 10, 14, 14);
             this.ctx.fillText(`${fuelCount}`, x + 20, y);
           } else {
             this.ctx.fillText(`${fuelCount}`, x + 20, y);
           }
-          y += 25;
+          y += 16;
           
           // Material
           this.ctx.fillText("Material:", x, y);
+          y += 14;
           if (materialCount > 0 && building.materialInventory.length > 0) {
             const materialType = building.materialInventory[0].type;
             const materialSprite = this.spriteCache.getResourceSprite(materialType);
-            this.ctx.drawImage(materialSprite, x, y - 12, 14, 14);
+            this.ctx.drawImage(materialSprite, x, y - 10, 14, 14);
             this.ctx.fillText(`${materialCount}`, x + 20, y);
           } else {
             this.ctx.fillText(`${materialCount}`, x + 20, y);
           }
-          y += 25;
+          y += 16;
           
           // Producto
           this.ctx.fillText("Producto:", x, y);
+          y += 14;
           if (building.inventory.length > 0) {
             const productSprite = this.spriteCache.getResourceSprite(building.inventory[0].type);
-            this.ctx.drawImage(productSprite, x, y - 12, 14, 14);
+            this.ctx.drawImage(productSprite, x, y - 10, 14, 14);
             this.ctx.fillText(`${building.inventory.length}`, x + 20, y);
           } else {
             this.ctx.fillText(`${building.inventory.length}`, x + 20, y);
