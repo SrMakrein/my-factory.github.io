@@ -30,7 +30,7 @@ class GameLoop {
       research: JSON.parse(JSON.stringify(ResearchTree)),
       missions: JSON.parse(JSON.stringify(MissionSystem.missions)),
       researchPoints: 0,
-      unlockedBuildings: new Set([BuildingType.MINER, BuildingType.CONVEYOR, BuildingType.STORAGE, BuildingType.LABORATORY]),
+      unlockedBuildings: new Set([BuildingType.MINER, BuildingType.CONVEYOR, BuildingType.STORAGE, BuildingType.SMELTER, BuildingType.ASSEMBLER, BuildingType.LABORATORY]),
     };
 
     this.running = false;
@@ -299,6 +299,7 @@ class GameLoop {
       building.experienceTickCounter = 0;
       building.inputInventory = [];
       building.lastExperienceTime = 0;
+      building.maxInventory = 25; // Capacidad total flexible para recibir recursos
     }
 
     if (type === BuildingType.ADVANCED_ASSEMBLER) {
@@ -346,7 +347,6 @@ class GameLoop {
     
     try {
       this.updateMissions();
-      this.processResearch();
 
       for (const building of this.gameState.buildings.values()) {
         this.updateBuilding(building);
@@ -485,34 +485,6 @@ class GameLoop {
     }
   }
 
-  processResearch() {
-    for (const [key, research] of Object.entries(this.gameState.research)) {
-      if (research.completed) continue;
-
-      if (research.prerequisite && !this.gameState.research[research.prerequisite].completed) {
-        continue;
-      }
-
-      research.progress += this.gameState.researchPoints / (research.cost * 100);
-      
-      if (research.progress >= 1) {
-        research.completed = true;
-        this.gameState.researchPoints -= research.cost;
-        research.progress = 1;
-        
-        for (const building of research.unlocks) {
-          this.gameState.unlockedBuildings.add(building);
-        }
-        
-        logger.info(`🔬 Investigación completada: "${research.name}"`);
-        
-        if (research.unlocks.length > 0) {
-          logger.info(`   ✅ Desbloqueados: ${research.unlocks.join(", ")}`);
-        }
-      }
-    }
-  }
-
   cleanOrphanedResources() {
     const resourcesInInventories = new Set();
 
@@ -594,9 +566,19 @@ class GameLoop {
       copper_plate: 5,
     };
 
-    const available = this.getAvailableResourcesInStorages();
+    // Contar recursos en el laboratorio
+    let cableCount = 0;
+    let copperCount = 0;
 
-    const canProcess = available.cable >= required.cable && available.copper_plate >= required.copper_plate;
+    if (laboratory.inventory) {
+      for (const resource of laboratory.inventory) {
+        if (resource.type === ResourceType.CABLE) cableCount++;
+        if (resource.type === ResourceType.COPPER_PLATE) copperCount++;
+      }
+    }
+
+    // Verificar si hay suficientes recursos en el laboratorio
+    const canProcess = cableCount >= required.cable && copperCount >= required.copper_plate;
 
     if (canProcess) {
       laboratory.experienceTickCounter = (laboratory.experienceTickCounter || 0) + 1;
@@ -604,36 +586,21 @@ class GameLoop {
       if (laboratory.experienceTickCounter >= 10) {
         laboratory.experienceTickCounter = 0;
         
+        // Consumir recursos del laboratorio
         let cableRemoved = 0;
         let copperRemoved = 0;
 
-        for (const building of this.gameState.buildings.values()) {
-          if (building.type === BuildingType.STORAGE) {
-            while (cableRemoved < required.cable && building.inventory.length > 0) {
-              const idx = building.inventory.findIndex(r => r.type === ResourceType.CABLE);
-              if (idx >= 0) {
-                const resource = building.inventory.splice(idx, 1)[0];
-                this.gameState.resources.delete(resource.id);
-                cableRemoved++;
-              } else {
-                break;
-              }
-            }
-
-            while (copperRemoved < required.copper_plate && building.inventory.length > 0) {
-              const idx = building.inventory.findIndex(r => r.type === ResourceType.COPPER_PLATE);
-              if (idx >= 0) {
-                const resource = building.inventory.splice(idx, 1)[0];
-                this.gameState.resources.delete(resource.id);
-                copperRemoved++;
-              } else {
-                break;
-              }
-            }
-
-            if (cableRemoved >= required.cable && copperRemoved >= required.copper_plate) {
-              break;
-            }
+        for (let i = (laboratory.inventory || []).length - 1; i >= 0; i--) {
+          const resource = laboratory.inventory[i];
+          
+          if (cableRemoved < required.cable && resource.type === ResourceType.CABLE) {
+            laboratory.inventory.splice(i, 1);
+            this.gameState.resources.delete(resource.id);
+            cableRemoved++;
+          } else if (copperRemoved < required.copper_plate && resource.type === ResourceType.COPPER_PLATE) {
+            laboratory.inventory.splice(i, 1);
+            this.gameState.resources.delete(resource.id);
+            copperRemoved++;
           }
         }
 
@@ -642,7 +609,7 @@ class GameLoop {
       }
     } else {
       laboratory.experienceTickCounter = 0;
-      logger.debug(`🔒 Lab requiere: ${required.cable}x Cable, ${required.copper_plate}x Placa de Cobre`);
+      logger.debug(`🔒 Lab requiere: ${required.cable}x Cable (tiene ${cableCount}), ${required.copper_plate}x Placa de Cobre (tiene ${copperCount})`);
     }
   }
 
@@ -943,6 +910,30 @@ class GameLoop {
           if (nextBuilding.inventory.length >= maxStorageInventory) {
             canAdd = false;
           }
+        } else if (nextBuilding.type === BuildingType.LABORATORY) {
+          // Laboratorio divide la capacidad equitativamente entre Cable y Copper_Plate
+          const resource = conveyor.inventory[0];
+          const maxLabCapacity = nextBuilding.maxInventory || 25;
+          const capacityPerType = Math.floor(maxLabCapacity / 2); // Mitad para cada tipo
+          
+          if (!((resource.type === ResourceType.CABLE || resource.type === ResourceType.COPPER_PLATE))) {
+            canAdd = false;
+          } else {
+            // Contar cuántos de cada tipo hay
+            const cableCount = nextBuilding.inventory.filter(r => r.type === ResourceType.CABLE).length;
+            const copperCount = nextBuilding.inventory.filter(r => r.type === ResourceType.COPPER_PLATE).length;
+            
+            // Solo añadir si no se alcanzó el límite para ese tipo específico
+            if (resource.type === ResourceType.CABLE && cableCount >= capacityPerType) {
+              canAdd = false;
+            } else if (resource.type === ResourceType.COPPER_PLATE && copperCount >= capacityPerType) {
+              canAdd = false;
+            }
+          }
+        } else if (nextBuilding.type === BuildingType.ASSEMBLER) {
+          // El ensamblador recibe items en inputInventory, no en inventory
+          // Se maneja mediante collectAssemblerInputs(), aquí solo ignoramos
+          canAdd = false;
         }
 
         if (canAdd) {
@@ -985,8 +976,22 @@ class GameLoop {
       assembler.inputInventory = [];
     }
     
-    const maxInputCapacity = 20;
-    if (assembler.inputInventory.length >= maxInputCapacity) return;
+    // Determinar capacidad necesaria basada en la receta
+    const recipes = {
+      cable: { input: ResourceType.COPPER_PLATE, inputCount: 2, output: ResourceType.CABLE, time: 10 },
+      coil: { input: ResourceType.CABLE, inputCount: 10, output: ResourceType.COIL, time: 15 },
+      construction_parts: { input: ResourceType.IRON_PLATE, inputCount: 1, output: ResourceType.CONSTRUCTION_PARTS, time: 20 }
+    };
+    
+    const recipe = recipes[assembler.selectedRecipe];
+    const maxInputCapacity = recipe ? recipe.inputCount : 1;
+    
+    // No aceptar más items si ya tiene lo que necesita para la receta
+    const currentInputCount = recipe ? assembler.inputInventory.filter(r => r.type === recipe.input).length : assembler.inputInventory.length;
+    if (currentInputCount >= maxInputCapacity) return;
+    
+    // No aceptar más items si hay output ya producido
+    if (assembler.outputInventory && assembler.outputInventory.length > 0) return;
 
     const adjacentChecks = [
       { pos: { x: assembler.position.x, y: assembler.position.y - 1 }, requiredDir: Direction.DOWN },
@@ -998,7 +1003,9 @@ class GameLoop {
     logger.debug(`📍 Recolectando inputs para ensamblador en (${assembler.position.x},${assembler.position.y})`);
 
     for (const check of adjacentChecks) {
-      if (assembler.inputInventory.length >= maxInputCapacity) break;
+      // Actualizar el conteo en cada iteración
+      const currentCount = recipe ? assembler.inputInventory.filter(r => r.type === recipe.input).length : assembler.inputInventory.length;
+      if (currentCount >= maxInputCapacity) break;
 
       const adjacentBuilding = this.gridSystem.getBuildingAt(check.pos.x, check.pos.y);
       

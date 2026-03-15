@@ -116,7 +116,7 @@ class Renderer {
         // Mostrar inventario
         if (building.inventory.length > 0) {
           if (building.type === BuildingType.STORAGE) {
-            // Para almacenes: solo mostrar barra de capacidad
+            // Para almacenes: mostrar barra de capacidad + número de items
             const maxCapacity = 250;
             const capacity = (building.inventory.length / maxCapacity);
             this.ctx.fillStyle = "rgba(255, 100, 100, 0.5)";
@@ -124,6 +124,26 @@ class Renderer {
             this.ctx.strokeStyle = "rgba(255, 100, 100, 0.8)";
             this.ctx.lineWidth = 1 / camera.zoom;
             this.ctx.strokeRect(x, y + tileSize - 4, tileSize, 4);
+
+            // Mostrar cantidad en esquina superior izquierda con fondo negro
+            const numStr = building.inventory.length.toString();
+            const fontSize = Math.max(8 / camera.zoom, 6);
+            this.ctx.font = `${fontSize}px Arial`;
+            this.ctx.textAlign = "center";
+            
+            const padding = 2;
+            const textWidth = 14;
+            const textHeight = fontSize + 2;
+            const rectX = x + padding;
+            const rectY = y + padding;
+            
+            // Dibujar fondo negro
+            this.ctx.fillStyle = "#000000";
+            this.ctx.fillRect(rectX, rectY, textWidth, textHeight);
+            
+            // Dibujar número en blanco
+            this.ctx.fillStyle = "#ffffff";
+            this.ctx.fillText(numStr, x + padding + textWidth / 2, y + fontSize + padding);
 
           } else if (building.type === BuildingType.CONVEYOR) {
             // Mostrar movimiento continuo de materiales en la cinta
@@ -943,6 +963,8 @@ class Renderer {
       { name: "Fundición", key: "F", type: BuildingType.SMELTER },
       { name: "Ensamblador", key: "E", type: BuildingType.ASSEMBLER },
       { name: "Laboratorio", key: "L", type: BuildingType.LABORATORY },
+      { name: "Ens.Avanzado (Nv.2)", key: "U", type: BuildingType.ADVANCED_ASSEMBLER },
+      { name: "Refinería (Nv.3)", key: "P", type: BuildingType.REFINERY },
     ];
 
     this.ctx.fillStyle = "#aaa";
