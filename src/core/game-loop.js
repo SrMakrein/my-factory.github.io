@@ -1076,7 +1076,21 @@ class GameLoop {
       };
       this.gameState.resources.set(output.id, output);
       assembler.outputInventory.push(output);
-      logger.debug(`✅ Ensamblador en (${assembler.position.x},${assembler.position.y}) produjo ${recipe.output}`);
+      
+      // Producir 4 outputs adicionales (total 5 unidades)
+      for (let i = 0; i < 4; i++) {
+        const additionalOutput = {
+          id: `res_${Date.now()}_${Math.random()}_${i}`,
+          type: recipe.output,
+          position: { x: assembler.position.x, y: assembler.position.y },
+          progress: 0,
+          onConveyor: false,
+        };
+        this.gameState.resources.set(additionalOutput.id, additionalOutput);
+        assembler.outputInventory.push(additionalOutput);
+      }
+      
+      logger.debug(`✅ Ensamblador en (${assembler.position.x},${assembler.position.y}) produjo 5x ${recipe.output}`);
 
       assembler.recipeProgress = 0;
     }
