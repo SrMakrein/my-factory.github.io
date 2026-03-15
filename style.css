@@ -68,4 +68,21 @@ body {
     width: 100%;
     height: 100%;
   }
+
+  .overlay-title {
+    font-size: 2.5rem;
+  }
+
+  .overlay-subtitle {
+    font-size: 1rem;
+  }
+
+  .start-button {
+    padding: 15px 40px;
+    font-size: 1.1rem;
+  }
+
+  .floating-icon {
+    font-size: 2rem;
+  }
 }
